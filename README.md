@@ -24,6 +24,7 @@
   - [步骤 9：运行修复版 ARC Controller Manager](#步骤-9运行修复版-arc-controller-manager)
 - [六、 运行验证与效果分析](#六-运行验证与效果分析)
 - [七、 常见故障排查手册 (FAQ)](#七-常见故障排查手册-faq)
+- [八、 AI 协作复现信息与初始 Prompt](#八-ai-协作复现信息与初始-prompt)
 
 ---
 
@@ -373,3 +374,27 @@ karmada-runner-4kx8b-runner-w24vc       1/1     Running   0          18s
 ### Q5: Runner Pod 报错找不到 Secret 或鉴权失败退出
 - **根因**：Karmada 未开启依赖自动穿透，导致 Pod 被调度到了子集群，但其绑定的 JIT Secret 遗留在控制面。
 - **解决办法**：检查 `manifests/02-propagation-policies.yaml` 中的 `arc-runner-pod-propagation`，必须显式声明 `propagateDeps: true`。
+
+---
+
+## 八、 AI 协作复现信息与初始 Prompt
+
+本项目全流程采用 AI 智能体（Agentic AI）以结对编程与自动化运维排障模式协作完成。相关开发工具、模型及最初驱动 Prompt 归档如下，完整复现演进记录可参考 [AI_REPRODUCTION.md](AI_REPRODUCTION.md)。
+
+### 1. 开发工具与模型配置
+- **开发协作工具**：**Antigravity CLI (`agy`)**
+- **底层驱动模型**：**Gemini 3.8 flash**
+- **协作模式**：多工具自主调用、代码检索与补丁编写、实时集群排障与配置编排
+
+### 2. 最初的核心驱动 Prompt
+> **最初需求与可行性论证 Prompt**：
+> ```text
+> 我期望arc这个项目可以对接使用karmada 以便能使用多个集群的资源，之前我们使用过liqo，这是将某个集群模拟成node，不太符合要求，更期望使用karmada，先分析下这个方案是否可行，以及是否可以快速poc
+> ```
+
+> **核心业务场景与设计目标 Prompt**：
+> ```text
+> 我期望的测试场景：一个统一的runner label，用户不感知底层有多个集群，github也不知道底层有多个集群，只需要把任务发给一个listener，这个listener把任务投递给karmada，由karmada负责找有资源的集群，执行任务
+> ```
+
+通过上述 Prompt 驱动，Agent 自动化完成了架构可行性论证、双平面架构设计、KinD 多集群环境搭建、三大原生协同断裂问题的定位与修复（Lua 状态聚合、Listener 跨面 TLS 与 Token 注入、JIT Secret 依赖穿透），以及 ARC 上游 Master 补丁合入与编译。
