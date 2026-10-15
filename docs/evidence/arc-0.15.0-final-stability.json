@@ -1,0 +1,82 @@
+{
+  "startedAt": "2026-10-15T02:17:40.809000+00:00",
+  "requiredContexts": [
+    "kind-member1",
+    "kind-member2"
+  ],
+  "samples": [
+    {
+      "at": "2026-10-15T02:17:56.794521+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:00.213889+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:03.630858+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:07.027448+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:10.435467+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:13.844756+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:17.252682+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:20.673844+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:18:24.080584+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    }
+  ],
+  "runners": {},
+  "passed": true,
+  "listener": "karmada-runner-fdfdcc69-listener",
+  "listenerUID": "2b60b070-a1c6-4e42-a3ff-292e6218eacf",
+  "configSecret": "karmada-runner-fdfdcc69-listener-config",
+  "configSecretResourceVersion": "3212268",
+  "listenerStabilityPassed": true,
+  "reconcileAnnotationRestored": true,
+  "annotationRestored": true,
+  "finishedAt": "2026-10-15T02:18:27.362446+00:00"
+}

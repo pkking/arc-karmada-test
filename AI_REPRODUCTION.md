@@ -1,5 +1,7 @@
 # ARC + Karmada 多集群联邦 PoC - AI 协作复现说明与 Prompt 记录
 
+> 本文是旧 PoC 的历史协作记录，不是当前安装步骤。2026-10-15 已迁移并实测官方 ARC `0.15.0`，不再合入源码补丁或编译旧控制器。当前入口见 [README](README.md)，证据见 [运行验证报告](docs/arc-0.15.0-validation.md)。
+
 本项目（ARC + Karmada 原生多集群 CI/CD 算力底座验证）全程采用 AI 智能体（Agentic AI）以结对编程与自动化排障模式协作完成。为了便于后续技术团队、开源贡献者与架构师完整复现方案研究与推导过程，特将本次研究所使用的开发工具、底层模型及关键 Prompt 详细归档记录于此。
 
 ---
@@ -59,10 +61,10 @@
    - 定位 `x509: certificate is valid for karmada-apiserver, not IP` 与 401 Unauthorized。
    - 利用 `listenerTemplate` 注入 `hostAliases` 与控制面专属 ServiceAccount Token 挂载。
 3. **JIT Secret 调度分离断裂**：
-   - 配置针对 `arc-runners` Pod 的 `PropagationPolicy`，声明 `propagateDeps: true`，实现瞬时凭证与 Pod 原子协同分发。
-4. **ARC 0.14.2 控制器 Secret 调谐死循环**：
+   - 配置针对 `arc-runners` Pod 的 `PropagationPolicy`，声明 `propagateDeps: true`，实现瞬时凭证随 Pod placement 分发（不是跨资源原子事务）。
+4. **ARC 0.14.2 控制器 Secret 调谐死循环（历史方案，已退役）**：
    - 发现控制面对 Secret 注入标签导致控制器不断触发更新与重启死循环。
-   - 分析 ARC 上游源码，合并 Master 分支修复补丁（PR `#4492`、`#4516`），并注入构建版本号编译出生产可用控制器。
+   - 分析 ARC 上游源码，合并 Master 分支修复补丁（PR `#4492`、`#4516`），并注入构建版本号完成旧 PoC。本段记录的是历史排障，不再作为安装要求；当前使用官方 0.15.0 镜像，不构建补丁版，也不据此宣称生产就绪。
 
 ---
 

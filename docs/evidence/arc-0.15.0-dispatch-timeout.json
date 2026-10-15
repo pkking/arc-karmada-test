@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-10-15T02:07:33.043448+00:00",
+  "requiredContexts": [
+    "kind-member2"
+  ],
+  "samples": [],
+  "runners": {},
+  "passed": false,
+  "listener": "karmada-runner-fdfdcc69-listener",
+  "listenerUID": "08799902-de7e-460f-b324-6c9b2393eb90",
+  "configSecret": "karmada-runner-fdfdcc69-listener-config",
+  "configSecretResourceVersion": "3209315",
+  "error": "Command '('gh', 'workflow', 'run', 'test-arc.yml', '--repo', 'pkking/arc-karmada-test')' timed out after 25 seconds",
+  "reconcileAnnotationRestored": true,
+  "annotationRestored": true,
+  "finishedAt": "2026-10-15T02:08:14.178791+00:00"
+}

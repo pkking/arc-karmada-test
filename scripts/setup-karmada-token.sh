@@ -28,30 +28,28 @@ metadata:
 EOF
 
 echo "==> 2. 确保 Listener ServiceAccount 存在于 arc-systems..."
-# 当 AutoscalingRunnerSet 创建后，ARC 控制器会自动生成 karmada-runner-<hash>-listener
-# 但为确保提前初始化凭证，我们为 listener 创建或使用专用 SA
+# 使用固定的控制面身份，避免令牌绑定到升级时可能删除的 ARC 自动生成 SA。
 SA_NAME="karmada-listener-sa"
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" -n arc-systems create sa "${SA_NAME}" --dry-run=client -o yaml | kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f -
 
-# 授予该 SA 对 arc-runners 命名空间的管理员权限
-kubectl --kubeconfig="${KUBECONFIG_KARMADA}" -n arc-runners create rolebinding karmada-listener-sa-admin \
-  --clusterrole=admin \
-  --serviceaccount=arc-systems:"${SA_NAME}" \
-  --dry-run=client -o yaml | kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f -
+# 授权由 manifests/03-rbac.yaml 的最小权限 Role/RoleBinding 提供。
+# 不再给 Listener 绑定 namespace admin。
 
 echo "==> 3. 提取 Karmada 控制面 CA 根证书..."
+umask 077
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-kubectl --kubeconfig="${KUBECONFIG_KARMADA}" config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${TMP_DIR}/ca.crt"
+kubectl --kubeconfig="${KUBECONFIG_KARMADA}" config view --minify --flatten --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${TMP_DIR}/ca.crt"
 
-echo "==> 4. 为 ServiceAccount 颁发长效 Token (10年有效期)..."
-TOKEN=$(kubectl --kubeconfig="${KUBECONFIG_KARMADA}" -n arc-systems create token "${SA_NAME}" --duration=87600h)
+echo "==> 4. 为 ServiceAccount 请求 Token（实际有效期由 API Server 决定）..."
+TOKEN_DURATION="${TOKEN_DURATION:-24h}"
+kubectl --kubeconfig="${KUBECONFIG_KARMADA}" -n arc-systems create token "${SA_NAME}" --duration="${TOKEN_DURATION}" > "${TMP_DIR}/token"
 
 echo "==> 5. 在 arc-systems 中创建/更新 karmada-token Secret..."
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" -n arc-systems create secret generic karmada-token \
   --from-file=ca.crt="${TMP_DIR}/ca.crt" \
-  --from-literal=token="${TOKEN}" \
+  --from-file=token="${TMP_DIR}/token" \
   --dry-run=client -o yaml | kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f -
 
 echo "==> [SUCCESS] karmada-token Secret 初始化完成！"

@@ -1,0 +1,390 @@
+{
+  "startedAt": "2026-10-15T02:10:36.665800+00:00",
+  "requiredContexts": [
+    "kind-member2"
+  ],
+  "samples": [
+    {
+      "at": "2026-10-15T02:10:56.722066+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:05.254574+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Pending"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Pending"
+          },
+          {
+            "name": "karmada-runner-runner-jzgzz",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:11.311662+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Pending"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Pending"
+          },
+          {
+            "name": "karmada-runner-runner-jzgzz",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:17.557223+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-jzgzz",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:24.125409+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-jzgzz",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:31.150695+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-jzgzz",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:37.238688+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-jzgzz",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:44.287315+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:50.532093+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": [
+          {
+            "name": "karmada-runner-runner-9x7dh",
+            "phase": "Running"
+          },
+          {
+            "name": "karmada-runner-runner-bh9xx",
+            "phase": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-15T02:11:57.016840+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:03.608946+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:10.420701+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:16.992562+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:23.548028+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:29.896046+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:36.409350+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:43.282643+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:49.897019+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    },
+    {
+      "at": "2026-10-15T02:12:56.274315+00:00",
+      "members": {
+        "kind-member1": [],
+        "kind-member2": []
+      }
+    }
+  ],
+  "runners": {
+    "karmada-runner-runner-9x7dh": {
+      "context": "kind-member2",
+      "jitSecrets": [
+        "karmada-runner-runner-9x7dh"
+      ],
+      "readyWithSecrets": true,
+      "namedStatusOnControlPlane": true
+    },
+    "karmada-runner-runner-bh9xx": {
+      "context": "kind-member2",
+      "jitSecrets": [
+        "karmada-runner-runner-bh9xx"
+      ],
+      "readyWithSecrets": true,
+      "namedStatusOnControlPlane": true
+    },
+    "karmada-runner-runner-jzgzz": {
+      "context": "kind-member2",
+      "jitSecrets": [
+        "karmada-runner-runner-jzgzz"
+      ],
+      "readyWithSecrets": true,
+      "namedStatusOnControlPlane": true
+    }
+  },
+  "passed": true,
+  "listener": "karmada-runner-fdfdcc69-listener",
+  "listenerUID": "952c0301-0407-47c9-ba47-b17eb9954a44",
+  "configSecret": "karmada-runner-fdfdcc69-listener-config",
+  "configSecretResourceVersion": "3210525",
+  "dispatchTime": "2026-10-15T02:10:52.328340+00:00",
+  "runId": 38669630663,
+  "workflow": {
+    "conclusion": "success",
+    "jobs": [
+      {
+        "completedAt": "2026-10-15T02:11:37Z",
+        "conclusion": "success",
+        "databaseId": 116209428337,
+        "name": "job-3",
+        "startedAt": "2026-10-15T02:11:15Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-10-15T02:11:19Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-10-15T02:11:19Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-10-15T02:11:19Z",
+            "conclusion": "success",
+            "name": "Report Job 3",
+            "number": 2,
+            "startedAt": "2026-10-15T02:11:19Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-10-15T02:11:20Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 3,
+            "startedAt": "2026-10-15T02:11:19Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/pkking/arc-karmada-test/actions/runs/38669630663/job/116209428337"
+      },
+      {
+        "completedAt": "2026-10-15T02:11:47Z",
+        "conclusion": "success",
+        "databaseId": 116209428601,
+        "name": "job-2",
+        "startedAt": "2026-10-15T02:11:33Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-10-15T02:11:35Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-10-15T02:11:35Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-10-15T02:11:35Z",
+            "conclusion": "success",
+            "name": "Report Job 2",
+            "number": 2,
+            "startedAt": "2026-10-15T02:11:35Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-10-15T02:11:40Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 3,
+            "startedAt": "2026-10-15T02:11:35Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/pkking/arc-karmada-test/actions/runs/38669630663/job/116209428601"
+      },
+      {
+        "completedAt": "2026-10-15T02:11:48Z",
+        "conclusion": "success",
+        "databaseId": 116209428623,
+        "name": "job-1",
+        "startedAt": "2026-10-15T02:11:33Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-10-15T02:11:36Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-10-15T02:11:36Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-10-15T02:11:36Z",
+            "conclusion": "success",
+            "name": "Report Job 1",
+            "number": 2,
+            "startedAt": "2026-10-15T02:11:36Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-10-15T02:11:39Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 3,
+            "startedAt": "2026-10-15T02:11:36Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/pkking/arc-karmada-test/actions/runs/38669630663/job/116209428623"
+      }
+    ],
+    "status": "completed",
+    "url": "https://github.com/pkking/arc-karmada-test/actions/runs/38669630663"
+  },
+  "remainingRuntimeResources": [],
+  "listenerStabilityPassed": true,
+  "workflowPassed": true,
+  "clusterCoveragePassed": true,
+  "cleanupPassed": true,
+  "reconcileAnnotationRestored": true,
+  "annotationRestored": true,
+  "finishedAt": "2026-10-15T02:13:02.923305+00:00"
+}

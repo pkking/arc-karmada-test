@@ -1,6 +1,8 @@
 # ARC + Karmada 多集群 CI/CD 算力底座复现与配置指南
 
-本项目是基于 **Actions Runner Controller (ARC)** 与 **Karmada 原生多集群联邦** 打造的生产级多集群 CI/CD 算力底座验证项目（Proof of Concept, PoC）。
+本项目是基于 **Actions Runner Controller (ARC)** 与 **Karmada 原生多集群联邦** 的多集群 CI/CD 算力底座验证项目（Proof of Concept, PoC），不是生产就绪保证。
+
+**当前版本：官方 ARC `0.15.0`，不再使用源码补丁或自编译控制器。** 2026-10-15 已在 Karmada `v1.19.0` / Kubernetes `v1.37.0` 的两个 Kind 成员集群上重新验证。实测证据与限制见 [`docs/arc-0.15.0-validation.md`](docs/arc-0.15.0-validation.md)。
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
 
@@ -21,7 +23,7 @@
   - [步骤 6：配置 Karmada 联邦分发策略](#步骤-6配置-karmada-联邦分发策略)
   - [步骤 7：应用 Runner RBAC 权限](#步骤-7应用-runner-rbac-权限)
   - [步骤 8：声明 AutoscalingRunnerSet](#步骤-8声明-autoscalingrunnerset)
-  - [步骤 9：运行修复版 ARC Controller Manager](#步骤-9运行修复版-arc-controller-manager)
+  - [步骤 9：运行官方 ARC Controller](#步骤-9运行官方-arc-controller)
 - [六、 运行验证与效果分析](#六-运行验证与效果分析)
 - [七、 常见故障排查手册 (FAQ)](#七-常见故障排查手册-faq)
 - [八、 AI 协作复现信息与初始 Prompt](#八-ai-协作复现信息与初始-prompt)
@@ -61,20 +63,20 @@
                       ┌───────────┐ ┌───────────┐
                       │  member1  │ │  member2  │
                       │ Runner Pod│ │ Runner Pod│  (原生网络空间运行，直连 GitHub)
-                      │ JIT Secret│ │ JIT Secret│  (瞬时凭证原子下发，零隧道依赖)
+                      │ JIT Secret│ │ JIT Secret│  (瞬时凭证依赖下发，零隧道依赖)
                       └───────────┘ └───────────┘
 ```
 
 - **统一入口**：开发者在 GitHub Workflow 中仅需指定单一统一标签（如 `runs-on: karmada-runner`）。
 - **单会话交互**：全局仅需运行一个 Listener Pod，避免任务争抢与 GitHub 轮询配额消耗。
-- **动态算力下发**：Karmada 调度器接管 Runner Pod，按各集群资源水位自动分摊调度。
+- **动态算力下发**：Karmada 调度器接管 Runner Pod，根据 placement 与集群状态选择执行集群；多个独立 Pod 的 `Divided / Weighted` 策略不保证每次都均匀分布。
 - **零网络隧道损耗**：Runner Pod 原生运行在子集群网络中，出网直接访问 GitHub，无跨集群容器网络损耗。
 
 ---
 
 ## 二、 核心机制深度解析
 
-为了打通 ARC 与 Karmada 的联邦协同，本方案攻克并沉淀了四项关键工程机制：
+本方案保留三项 Karmada 适配机制，第四项历史 ARC 源码修复已由官方 release 替代：
 
 ### 机制 ①：Karmada Pod 状态无损聚合器
 - **痛点根因**：Karmada 内置默认的 Pod 状态聚合器 `aggregatePodStatus` 仅复制了容器的 `Ready` 和 `State`，但**丢弃了容器名称（`containerStatuses[].name`）与 Conditions（如 `PodReady=True`）**。ARC 控制器在检查 Pod 时，因找不到名为 `runner` 的容器且缺少 Ready 状态，将 Runner 误判为超时未就绪并主动删除。
@@ -84,28 +86,47 @@
 - **痛点根因**：Listener Pod 运行于成员集群，通过 `InClusterConfig()` 默认与本地集群 API 通信。若直接改写 `KUBERNETES_SERVICE_HOST` 为 Karmada IP，会遭遇两大错误：
   1. **TLS 校验失败**：Karmada API Server 证书的 SAN 仅包含 `karmada-apiserver`、`localhost` 等，直接使用 IP 访问报错 `x509: certificate is valid for ..., not <IP>`；
   2. **401 Unauthorized**：成员集群注入的 ServiceAccount Token 无法通过 Karmada 鉴权。
-- **技术实现**：在 AutoscalingRunnerSet 的 `listenerTemplate` 中配置 `hostAliases` 解析 `karmada-apiserver`，并挂载预先生成的控制面 `karmada-token` Secret（含控制面 CA 与长效 Token，见 [`manifests/04-autoscalingrunnerset.yaml`](manifests/04-autoscalingrunnerset.yaml)）。
+- **技术实现**：在 AutoscalingRunnerSet 的 `listenerTemplate` 中配置 `hostAliases` 解析 `karmada-apiserver`，并挂载预先生成的控制面 `karmada-token` Secret（含控制面 CA 与需定期轮换的 Token，见 [`manifests/04-autoscalingrunnerset.yaml`](manifests/04-autoscalingrunnerset.yaml)）。
 
 ### 机制 ③：瞬时 JIT 凭证与 Runner Pod 自动绑定下发
 - **痛点根因**：GitHub Actions 任务分发时，ARC 会在控制面动态生成一次性瞬时 JIT Token Secret。若 Runner Pod 与其引用的 Secret 分离调度到了不同集群，Runner 将无法获取 Token 而退出。
-- **技术实现**：配置针对 `arc-runners` 命名空间中 Pod 的 `PropagationPolicy`，开启依赖自动追踪（`propagateDeps: true`）与分片调度策略（`Divided / Weighted`）。Karmada 会自动分析 Pod 环境变量中通过 `valueFrom.secretKeyRef` 引用的 JIT Secret，将其与 Pod 原子下发至同一成员集群（见 [`manifests/02-propagation-policies.yaml`](manifests/02-propagation-policies.yaml)）。
+- **技术实现**：配置针对 `arc-runners` 命名空间中 Pod 的 `PropagationPolicy`，开启依赖自动追踪（`propagateDeps: true`）与分片调度策略（`Divided / Weighted`）。Karmada 会自动分析 Pod 环境变量中通过 `valueFrom.secretKeyRef` 引用的 JIT Secret，按 Pod 的 placement 将依赖下发到对应成员集群（不是跨资源原子事务，Pod 启动时可能短暂等待 Secret）（见 [`manifests/02-propagation-policies.yaml`](manifests/02-propagation-policies.yaml)）。
 
-### 机制 ④：ARC 控制器 Secret 调谐死循环修复
-- **痛点根因**：在官方发布版 `0.14.2` 中，`AutoscalingListenerReconciler` 在比较 `desiredSecret` 与现有 Secret 时，未剥离 Karmada 自动注入的 Labels 与 Annotations，误判 Secret 发生变更不断调用 `r.Patch` 更新 Secret，导致 Secret 的 `ResourceVersion` 递增并触发 `Listener config secret changed, restarting listener pod`，Listener 陷入无休止重启。
-- **技术实现**：合并 ARC 上游 Master 分支修复补丁（PR `#4492` 与 `#4516`），在编译控制器时显式注入当前 Helm/CRD 匹配的版本号 `-ldflags "-X github.com/actions/actions-runner-controller/build.Version=0.14.2"`（见 [`scripts/run-arc-manager.sh`](scripts/run-arc-manager.sh)）。
+### 机制 ④：使用官方 ARC 0.15.0，移除历史源码补丁
+- **历史问题**：旧方案中，Secret 上的 Karmada 元数据触发控制器反复 Patch 和 Listener 重建。
+- **当前实现**：官方 `gha-runner-scale-set-0.15.0` 已包含相关上游变更，按现存与期望 metadata 合并后比较，并单独比较 Secret Data。直接运行官方镜像，不再 cherry-pick、构建 `arc-manager-fixed` 或伪装 `build.Version`。
+- **版本一致性**：Controller/Listener 使用 `0.15.0`，本仓库四个 CRD 来自同一 release；手写 AutoscalingRunnerSet 必须带 `app.kubernetes.io/version: "0.15.0"`，缺失或不兼容会被 ARC 删除。参见[静态核对](docs/arc-0.15.0-assessment.md)与[运行验证](docs/arc-0.15.0-validation.md)。
 
 ---
 
 ## 三、 环境依赖与前置条件
 
-| 依赖组件 | 建议版本 | 说明 |
+以下是 **2026-10-15 实际核对并运行验证的版本**，不是最低版本要求，也不表示其他版本已通过兼容性验证。部署组件需显式固定版本，避免依赖 `latest` 或本机工具的默认值。
+
+### 部署组件
+
+| 组件 | 当前版本 / 镜像 | 说明 |
 | :--- | :--- | :--- |
-| **Docker** | 24.0+ | 用于承载 Kind 容器化 Kubernetes 节点 |
-| **Kind** | v0.20.0+ | 用于快速构建本地多集群拓扑 |
-| **Kubectl** | v1.28.0+ | Kubernetes 命令行客户端 |
-| **Karmada** | v1.10.0+ / v1.11.0+ | 多集群联邦管理控制面 |
-| **Go** | 1.22+ | 用于从源码构建修复版 ARC Controller（若已有编译好的二进制则可省略） |
-| **GitHub 访问凭证** | PAT (Repo 权限) | 具有目标仓库 `repo` 作用域的 Personal Access Token 或 GitHub App 密钥 |
+| **ARC Controller / Listener** | `ghcr.io/actions/gha-runner-scale-set-controller:0.15.0` | 官方 release，无源码补丁；两者使用同一镜像 |
+| **ARC CRD / RunnerSet 标签** | `0.15.0` | 四个 CRD 来自 `gha-runner-scale-set-0.15.0`；`app.kubernetes.io/version` 同步为 `0.15.0` |
+| **GitHub Actions Runner** | `ghcr.io/actions/actions-runner:2.337.0` | 与 ARC 独立版本，不使用 `latest` |
+| **Karmada** | `v1.19.0` | aggregated-apiserver、controller-manager、scheduler、webhook 均为 `docker.io/karmada/<组件名>:v1.19.0` |
+| **Kind 宿主 / 成员 Kubernetes** | `kindest/node:v1.37.0` | 三个 Kind 集群均使用该版本；镜像 digest 见下方创建命令 |
+| **Karmada 控制面 Kubernetes 组件** | `registry.k8s.io/kube-apiserver:v1.37.0`、`registry.k8s.io/kube-controller-manager:v1.37.0` | 与宿主 / 成员集群版本一致 |
+| **Karmada etcd** | `registry.k8s.io/etcd:3.7.0-0` | 本次环境的实际运行镜像 |
+
+### 本机操作工具
+
+| 工具 | 实测版本 | 说明 |
+| :--- | :--- | :--- |
+| **Docker Client / Server** | `29.8.2` / `29.8.2` | 本机 daemon 为 Docker Desktop；Controller 使用 Docker host 网络；镜像导出使用 `--platform` |
+| **Kind CLI** | `v0.33.0` | 与节点 Kubernetes 镜像版本分开固定 |
+| **kubectl** | `v1.36.1` | 当前客户端；服务端为 `v1.37.0`，不要把旧 `v1.28.0+` 当作本环境已验证范围 |
+| **Python** | `3.13.16` | 执行运行验证和离线护栏测试，无第三方 Python 依赖 |
+| **GitHub CLI** | `2.102.0` | 触发及检查真实 GitHub Actions workflow |
+| **karmadactl** | 本机报告 `v0.0.0-master`，commit/build 信息 unknown | 仅如实记录当前工具，不能作为可复现发布版本；从零搭建建议使用与服务端匹配的 `v1.19.0` release，并显式固定下方镜像和 CRD。更换 CLI 后需另行验证初始化步骤 |
+
+无需安装 Go，也无需克隆 ARC 源码。GitHub 认证需 PAT（目标仓库权限）或 GitHub App 密钥；凭据保存在 Kubernetes Secret，不提交到 Git。
 
 ---
 
@@ -126,11 +147,14 @@ arc-karmada-test/
 │   ├── 00-namespaces.yaml               # 业务与系统命名空间 (arc-systems, arc-runners)
 │   ├── 01-karmada-interpreter.yaml      # 核心机制 ①：Karmada Pod 状态无损聚合器
 │   ├── 02-propagation-policies.yaml     # 核心机制 ③：分发策略 (Secret, Listener, Runner Pod+JIT)
-│   ├── 03-rbac.yaml                     # Runner Pod 运行所需 RBAC 权限
+│   ├── 03-rbac.yaml                     # 无权限 Runner SA + Listener 控制面最小权限
 │   └── 04-autoscalingrunnerset.yaml     # 核心机制 ②：AutoscalingRunnerSet 及 Listener 凭据注入
+├── docs/                                # 版本评估、运行验证及脱敏证据
 └── scripts/
-    ├── setup-karmada-token.sh           # 一键提取控制面 CA 并生成 Listener 认证 Secret
-    └── run-arc-controller.sh            # 核心机制 ④：编译并启动修复版 ARC Controller (同 run-arc-manager.sh)
+    ├── setup-karmada-token.sh           # 控制面 CA 与 Listener 认证 Secret（需轮换）
+    ├── run-arc-manager.sh               # Docker 运行官方 ARC 0.15.0，无补丁
+    ├── run-arc-controller.sh            # 兼容入口，符号链接至 run-arc-manager.sh
+    └── verify-arc.py                    # Listener 稳定性、真实 workflow、分发与清理回归
 ```
 
 ---
@@ -143,17 +167,33 @@ arc-karmada-test/
 
 #### 1.1 使用 Kind 创建三个集群
 ```bash
-# 创建 Karmada 宿主集群
-kind create cluster --name karmada-host
+# 显式固定本次实测节点镜像，不依赖 Kind CLI 的默认 Kubernetes 版本
+KIND_NODE_IMAGE="kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"
 
-# 创建两个成员执行集群
-kind create cluster --name member1
-kind create cluster --name member2
+# 创建 Karmada 宿主集群和两个成员执行集群
+kind create cluster --name karmada-host --image="${KIND_NODE_IMAGE}"
+kind create cluster --name member1 --image="${KIND_NODE_IMAGE}"
+kind create cluster --name member2 --image="${KIND_NODE_IMAGE}"
 ```
 
 #### 1.2 在 karmada-host 上初始化 Karmada
+
+本机开发版 `karmadactl` 的默认镜像/CRD 指向 `v0.0.0-master`，不能直接使用无版本参数的 `init`。以下显式对齐现有环境的组件版本；本次回归复用了已有集群，**没有重建集群验证完整初始化流程**，使用其他 CLI 版本时先核对 `karmadactl init --help`：
+
 ```bash
-karmadactl init --kubeconfig=$HOME/.kube/config --context=kind-karmada-host
+KARMADA_VERSION="v1.19.0"
+KUBERNETES_VERSION="v1.37.0"
+
+karmadactl init --kubeconfig="$HOME/.kube/config" --context=kind-karmada-host \
+  --crds="https://github.com/karmada-io/karmada/releases/download/${KARMADA_VERSION}/crds.tar.gz" \
+  --karmada-aggregated-apiserver-image="docker.io/karmada/karmada-aggregated-apiserver:${KARMADA_VERSION}" \
+  --karmada-controller-manager-image="docker.io/karmada/karmada-controller-manager:${KARMADA_VERSION}" \
+  --karmada-scheduler-image="docker.io/karmada/karmada-scheduler:${KARMADA_VERSION}" \
+  --karmada-webhook-image="docker.io/karmada/karmada-webhook:${KARMADA_VERSION}" \
+  --karmada-apiserver-image="registry.k8s.io/kube-apiserver:${KUBERNETES_VERSION}" \
+  --karmada-kube-controller-manager-image="registry.k8s.io/kube-controller-manager:${KUBERNETES_VERSION}" \
+  --kube-image-tag="${KUBERNETES_VERSION}" \
+  --etcd-image="registry.k8s.io/etcd:3.7.0-0"
 ```
 安装完成后，Karmada 控制面的 Kubeconfig 默认生成在 `$HOME/.kube/karmada.config` 或自定义路径（如 `$HOME/karmada-data/karmada-apiserver.config`）。
 
@@ -172,8 +212,8 @@ kubectl --kubeconfig=$HOME/karmada-data/karmada-apiserver.config get clusters
 预期输出：
 ```
 NAME      VERSION   MODE   READY   AGE
-member1   v1.30.0   Push   True    1h
-member2   v1.30.0   Push   True    1h
+member1   v1.37.0   Push   True    ...
+member2   v1.37.0   Push   True    ...
 ```
 
 ---
@@ -185,8 +225,10 @@ member2   v1.30.0   Push   True    1h
 ```bash
 KUBECONFIG_KARMADA="$HOME/karmada-data/karmada-apiserver.config"
 
-kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f crds/
+kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply --server-side -f crds/
 ```
+
+升级已有环境前先备份 CRD/ARC CR、确认无运行中任务并停掉旧 Controller。若 server-side apply 提示旧字段所有权冲突，审阅差异后可**仅对这四个 CRD**使用 `--force-conflicts --field-manager=arc-release-upgrade`；不要盲目覆盖其他资源。Helm 升级也不应被假定会自动升级已有 CRD。
 
 验证 CRD 安装状态：
 ```bash
@@ -232,14 +274,17 @@ kubectl --kubeconfig="${KUBECONFIG_KARMADA}" get resourceinterpretercustomizatio
 
 ### 步骤 5：初始化 Listener 跨集群认证凭据
 
-此步骤解决 **机制 ②** 中的凭据生成问题。运行提供的脚本，自动提取 Karmada CA 证书并生成长效 Token：
+此步骤解决 **机制 ②** 中的凭据生成问题。使用固定控制面身份 `arc-systems/karmada-listener-sa`；先应用最小权限 RBAC，再提取 CA 并请求 Token：
 
 ```bash
 export KUBECONFIG_KARMADA="$HOME/karmada-data/karmada-apiserver.config"
+kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/03-rbac.yaml
 bash scripts/setup-karmada-token.sh
 ```
 
-该脚本会在 `arc-systems` 命名空间下创建包含 `ca.crt` 和 `token` 的 Secret：`karmada-token`。
+该脚本会在 `arc-systems` 创建包含 `ca.crt` 和 `token` 的 `karmada-token` Secret。默认请求 `24h`，可用 `TOKEN_DURATION` 调整，实际到期时间由 API Server 决定。**到期前重新运行脚本轮换**；本 PoC 尚未实现自动轮换。不要使用绑定到旧 Listener 自动生成 SA 的 Token。
+
+升级旧环境时，移除旧 `arc-runners/karmada-listener-sa-admin` RoleBinding（如果存在）；新的清单不再需要旧 `karmada-runner-gha-rs-manager` Role/RoleBinding。Controller 使用 kubeconfig 权限，本 PoC 为管理员；这不是生产最小权限部署。
 
 ---
 
@@ -251,6 +296,8 @@ bash scripts/setup-karmada-token.sh
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/02-propagation-policies.yaml
 ```
 
+Listener Pod/SA 按稳定的 scale-set labels 匹配，引用的 config Secret 和 Token 自动追踪，不再写死 Listener hash。基础策略同时分发无权限 Runner SA，并仅对显式命名的两个基础资源使用 `conflictResolution: Overwrite` 接管旧副本；请确认成员集群中同名资源可以被本方案管理。
+
 验证策略就绪：
 ```bash
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" get propagationpolicy -A
@@ -260,7 +307,7 @@ kubectl --kubeconfig="${KUBECONFIG_KARMADA}" get propagationpolicy -A
 
 ### 步骤 7：应用 Runner RBAC 权限
 
-在 `arc-runners` 命名空间中配置 Runner Pod 与 Manager 的 RBAC 授权：
+配置无权限 Runner SA，以及 Listener 控制面身份的最小权限（对应官方 0.15.0 `rulesForListenerRole`：Patch 指定 EphemeralRunnerSet、Get/Patch EphemeralRunner、Patch 其 status）。不再绑定 namespace admin：
 
 ```bash
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/03-rbac.yaml
@@ -273,7 +320,8 @@ kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/03-rbac.yaml
 在应用清单前，请确认 `manifests/04-autoscalingrunnerset.yaml` 中的配置项：
 1. `githubConfigUrl`: 替换为您的测试仓库地址（如 `https://github.com/pkking/arc-karmada-test`）；
 2. `hostAliases[0].ip`: 替换为您当前环境中 Karmada 控制面的访问 IP（如 Kind 网桥 IP `172.22.0.4` 或宿主机 IP）；
-3. 检查无误后，应用清单：
+3. `app.kubernetes.io/version` 必须与 Controller 一致（当前 `0.15.0`）；Runner 镜像固定为 `2.337.0`；
+4. 检查无误后，应用清单：
 
 ```bash
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/04-autoscalingrunnerset.yaml
@@ -281,24 +329,26 @@ kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/04-autoscalingru
 
 ---
 
-### 步骤 9：运行修复版 ARC Controller
+### 步骤 9：运行官方 ARC Controller
 
-此步骤落实 **机制 ④**，运行解决了 Secret 循环调谐 Bug 的控制器：
+使用官方镜像 `ghcr.io/actions/gha-runner-scale-set-controller:0.15.0`，直接面向 Karmada 调谐。脚本通过只读挂载的 kubeconfig 访问控制面，GitHub 认证来自 `spec.githubConfigSecret`，不需要给启动脚本传 PAT。
 
 ```bash
-# 导出 Karmada 配置路径与 GitHub Token
 export KUBECONFIG_KARMADA="$HOME/karmada-data/karmada-apiserver.config"
-export GITHUB_TOKEN="ghp_yourPersonalAccessTokenHere"
-
-# 运行 ARC Controller
+# 先停掉旧 Controller，避免新旧版本同时调谐。
 bash scripts/run-arc-controller.sh
 ```
 
+脚本默认容器名 `arc-karmada-controller`，前台运行。另一个终端可用 `docker logs arc-karmada-controller` 检查日志，`docker stop arc-karmada-controller` 停止。`ARC_VERSION` 可覆盖默认版本，但必须同时核对 CRD 与 RunnerSet 标签；不要只改镜像版本。
+
+**Kind 拉镜像限制**：若成员节点的 containerd 代理失效，先在宿主机 `docker pull` 官方 Controller/Runner 镜像，再预加载到两个成员节点。多架构镜像的 `kind load docker-image` 若报缺失 digest，可用 `docker image save --platform linux/amd64` 后通过 `docker exec -i <member>-control-plane ctr -n=k8s.io images import --platform linux/amd64 --digests -` 导入（需支持 `--platform` 的 Docker，架构按实际修改）。这只是预加载官方镜像，不是重新构建。
+
 控制器启动成功后，会自动检测 Karmada 上的 `AutoscalingRunnerSet` 并拉起对应的 Listener Pod：
 ```
-==> 启动 ARC Controller Manager (针对 Karmada 控制面)...
-{"level":"info","ts":"...","logger":"controller-runtime.builder","msg":"Registering a mutating webhook"...}
-{"level":"info","ts":"...","logger":"AutoscalingRunnerSet","msg":"Reconciling AutoscalingRunnerSet"...}
+==> Starting official ARC 0.15.0 against Karmada
+    Image:      ghcr.io/actions/gha-runner-scale-set-controller:0.15.0
+...
+AutoscalingRunnerSet  Autoscaling runner set is up to date and ready  {"version":"0.15.0",...}
 ```
 
 此时在控制面查看 Listener 状态：
@@ -311,13 +361,26 @@ NAME                               READY   STATUS    RESTARTS   AGE
 karmada-runner-fdfdcc69-listener   1/1     Running   0          2m
 ```
 
-在 GitHub 仓库的 **Settings -> Actions -> Runners** 页面中，即可观察到状态为 **Idle** 的 Runner 监听池已成功就绪！
+Listener Ready 且已成功建立 GitHub session 后，监听池就绪。`minRunners: 0` 时没有常驻 Runner；实际任务成功执行才是端到端验收依据。
 
 ---
 
 ## 六、 运行验证与效果分析
 
-### 1. 触发并发 Workflow
+### 自动化回归（推荐）
+
+先确保 Listener Ready、成员集群上下文 `kind-member1` / `kind-member2` 可访问且 `gh` 已认证。以下命令会注入并恢复测试 annotation、反复触发真实 Listener 调谐，自动派发一个 GitHub workflow，并检查三任务成功、两成员集群实际执行、JIT Secret 同集群可用、状态回传、Pod/临时 Secret/ER 回收，以及稳定窗口内 Listener UID/Secret ResourceVersion 不变：
+
+```bash
+python3 scripts/verify-arc.py --dispatch --duration 180 \
+  --output /tmp/arc-015-validation/runtime.json
+```
+
+仅检查 Listener 稳定性可去掉 `--dispatch`。可用 `--repo`、`--kubeconfig`、`--contexts` 指定环境。默认要求全部成员都有 Runner 执行证据；若某轮全部落到一个成员，会因跨成员覆盖不足而失败，即使 GitHub 任务成功。定向测试可在**明确临时修改 placement 并在结束后恢复**的前提下，用 `--required-contexts kind-member2` 只验该成员执行能力，不能把它当作自动均匀分摊通过。
+
+JSON 不包含 Secret Data 或 Token；本脚本按专用 PoC 命名空间设计，不要在有无关并发任务的共享池上直接跑清理断言。观察窗口结束未满足条件会退出非零，不应通过延迟超时或放宽断言掩盖故障。离线护栏测试可运行 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`。
+
+### 1. 手动触发并发 Workflow
 在测试仓库中触发 [`.github/workflows/test-arc.yml`](.github/workflows/test-arc.yml)（包含 3 个并发 Job，指定 `runs-on: karmada-runner`）：
 
 ```bash
@@ -330,26 +393,26 @@ gh workflow run test-arc.yml --repo pkking/arc-karmada-test
 
 ```bash
 # 查看 member1 上的 Runner Pod
-kubectl --kubeconfig=$HOME/karmada-data/member1-internal.config -n arc-runners get pods
+kubectl --context=kind-member1 -n arc-runners get pods
 
 # 查看 member2 上的 Runner Pod
-kubectl --kubeconfig=$HOME/karmada-data/member2-internal.config -n arc-runners get pods
+kubectl --context=kind-member2 -n arc-runners get pods
 ```
 
-**实际运行分摊表现：**
+**本次 ARC 0.15.0 实测分摊（首轮）：**
 ```
 === member1 集群节点 ===
 NAME                                    READY   STATUS    RESTARTS   AGE
-karmada-runner-4kx8b-runner-7d9cf       1/1     Running   0          18s
-karmada-runner-4kx8b-runner-l89sf       1/1     Running   0          17s
+karmada-runner-runner-k8bcd           1/1     Running   0          ...
+karmada-runner-runner-kc2fs           1/1     Running   0          ...
 
 === member2 集群节点 ===
 NAME                                    READY   STATUS    RESTARTS   AGE
-karmada-runner-4kx8b-runner-w24vc       1/1     Running   0          18s
+karmada-runner-runner-twx87           1/1     Running   0          ...
 ```
-- **验证结论 1**：Karmada 调度器根据 `Divided` 权重算法，成功将 3 个并发 Runner Pod 动态分散调度至 `member1`（2个）与 `member2`（1个），避免了单集群负载倾斜。
-- **验证结论 2**：`propagateDeps: true` 策略成功将每个 Runner 对应的一次性 JIT Secret 自动穿透投递至对应的子集群，无任何鉴权或镜像拉取失败。
-- **验证结论 3**：任务执行完成后，ARC 控制器与 Karmada 联邦引擎协同完成垃圾回收，控制面与子集群的 Pod、Work 及临时 JIT Secret 均被**即时完整销毁（Zero Leaks）**。
+- **验证结论 1**：官方 ARC 0.15.0 成功执行三个并发 job；本轮在 `member1` 观察到 2 个 Runner、`member2` 观察到 1 个，不表示未来每轮必定按 2:1 分配。
+- **验证结论 2**：每个就绪 Runner 的 JIT Secret 在对应成员集群存在，控制面回传了名为 `runner` 的容器状态；环境中的镜像拉取代理问题通过预加载官方镜像解决。
+- **验证结论 3**：在观测窗口结束时，本轮 Runner Pod、EphemeralRunner 及观察到的 JIT Secret 已清理；没有宣称所有历史资源、Work 或故障路径都“即时 Zero Leaks”。详见运行报告的已验证范围与历史残留说明。
 
 ---
 
@@ -368,8 +431,8 @@ karmada-runner-4kx8b-runner-w24vc       1/1     Running   0          18s
 - **解决办法**：确保已成功应用 [`manifests/01-karmada-interpreter.yaml`](manifests/01-karmada-interpreter.yaml) 自定义 Lua 聚合器，且 `ResourceInterpreterCustomization` 处于就绪状态。
 
 ### Q4: Listener Pod 陷入无限删除与重启死循环，日志显示 `Listener config secret changed`
-- **根因**：ARC 0.14.2 版本的 Secret Reconciler 缺陷。Karmada 会在 Secret 上打入联邦管理标签/注解，触发 0.14.2 控制器的死循环 Patch。
-- **解决办法**：使用上游 Master 分支合并了 PR `#4492` 的代码，并带有 `-ldflags "-X .../build.Version=0.14.2"` 进行编译（见 [`scripts/run-arc-manager.sh`](scripts/run-arc-manager.sh)）。
+- **历史表现**：旧 PoC 中带 `0.14.2` 版本标识的控制器曾因 Secret 上的 Karmada 元数据反复 Patch。不能把 `#4492` 单独描述为忽略这些元数据的修复；最终采用的是官方 0.15.0 的合并比较实现，详见[版本核对](docs/arc-0.15.0-assessment.md)。
+- **解决办法**：使用官方 ARC `0.15.0` 与匹配 CRD/版本标签（见 [`scripts/run-arc-manager.sh`](scripts/run-arc-manager.sh)），不要再合并补丁或伪装 build.Version。轮换 config Secret 本身的内容/metadata 可能引起一次正常替换；验收关注的是稳定后仍反复 Patch/重建，而不是要求所有配置变化都永不重启。
 
 ### Q5: Runner Pod 报错找不到 Secret 或鉴权失败退出
 - **根因**：Karmada 未开启依赖自动穿透，导致 Pod 被调度到了子集群，但其绑定的 JIT Secret 遗留在控制面。
@@ -397,4 +460,4 @@ karmada-runner-4kx8b-runner-w24vc       1/1     Running   0          18s
 > 我期望的测试场景：一个统一的runner label，用户不感知底层有多个集群，github也不知道底层有多个集群，只需要把任务发给一个listener，这个listener把任务投递给karmada，由karmada负责找有资源的集群，执行任务
 > ```
 
-通过上述 Prompt 驱动，Agent 自动化完成了架构可行性论证、双平面架构设计、KinD 多集群环境搭建、三大原生协同断裂问题的定位与修复（Lua 状态聚合、Listener 跨面 TLS 与 Token 注入、JIT Secret 依赖穿透），以及 ARC 上游 Master 补丁合入与编译。
+通过上述 Prompt 驱动，Agent 自动化完成了架构可行性论证、双平面架构设计、KinD 多集群环境搭建、三大原生协同断裂问题的定位与修复（Lua 状态聚合、Listener 跨面 TLS 与 Token 注入、JIT Secret 依赖穿透），以及旧版本阶段的 ARC 源码排障。**历史补丁/编译流程已退役，当前复现使用官方 0.15.0 镜像。**

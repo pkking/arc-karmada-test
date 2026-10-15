@@ -1,0 +1,15 @@
+{
+  "startedAt": "2026-10-15T01:58:00.596562+00:00",
+  "samples": [],
+  "runners": {},
+  "passed": false,
+  "listener": "karmada-runner-fdfdcc69-listener",
+  "listenerUID": "e62cd2d0-8aef-40b7-95db-6bbce88fe679",
+  "configSecret": "karmada-runner-fdfdcc69-listener-config",
+  "configSecretResourceVersion": "3206331",
+  "dispatchTime": "2026-10-15T01:58:16.334592+00:00",
+  "error": "kubectl failed (exit 1)",
+  "reconcileAnnotationRestored": false,
+  "annotationRestored": false,
+  "finishedAt": "2026-10-15T01:58:20.144717+00:00"
+}

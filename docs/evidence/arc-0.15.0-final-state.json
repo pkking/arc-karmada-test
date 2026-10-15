@@ -1,0 +1,31 @@
+{
+  "at": "2026-10-15T02:15:51.441852+00:00",
+  "remainingObservedRunnerWorks": [],
+  "remainingObservedRunnerBindings": [],
+  "controlRunnerPods": [],
+  "controlEphemeralRunners": [],
+  "memberRunnerPods": {
+    "kind-member1": [],
+    "kind-member2": []
+  },
+  "remainingObservedJitSecrets": {
+    "kind-member1": [],
+    "kind-member2": [],
+    "control": []
+  },
+  "legacyEphemeralRunnerSets": [
+    {
+      "name": "karmada-runner-wvfql",
+      "deletionTimestamp": "2026-10-15T01:46:38Z",
+      "finalizers": [
+        "ephemeralrunner.actions.github.com/finalizer"
+      ]
+    }
+  ],
+  "restoredRunnerPlacement": [
+    "member1",
+    "member2"
+  ],
+  "currentControllerImage": "ghcr.io/actions/gha-runner-scale-set-controller:0.15.0",
+  "observedRuntimeCleanupPassed": true
+}

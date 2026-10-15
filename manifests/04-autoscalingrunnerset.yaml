@@ -17,6 +17,10 @@ metadata:
   labels:
     app.kubernetes.io/component: "autoscaling-runner-set"
     app.kubernetes.io/part-of: gha-rs
+    # 必须匹配 Controller build.Version；缺失/不兼容会导致 ARC 删除此资源。
+    app.kubernetes.io/version: "0.15.0"
+    app.kubernetes.io/name: karmada-runner
+    app.kubernetes.io/instance: karmada-runner
     actions.github.com/scale-set-name: karmada-runner
     actions.github.com/scale-set-namespace: arc-runners
 spec:
@@ -55,8 +59,9 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: karmada-runner-gha-rs-no-permission
+      automountServiceAccountToken: false
       containers:
       - name: runner
         command:
         - /home/runner/run.sh
-        image: ghcr.io/actions/actions-runner:latest
+        image: ghcr.io/actions/actions-runner:2.337.0

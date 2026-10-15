@@ -2,18 +2,23 @@
 # 核心分发策略 (PropagationPolicies)
 # ==============================================================================
 
-# 1. 基础鉴权 Secret 全局分发策略
-# 确保包含 GitHub Token / App 密钥的 Secret 同步至所有承载 Runner 的子集群
+# 1. 基础资源分发：GitHub Secret 与无权限 Runner ServiceAccount
+# Runner Pod 使用的 ServiceAccount 必须存在于每个执行集群。
 apiVersion: policy.karmada.io/v1alpha1
 kind: PropagationPolicy
 metadata:
   name: arc-secret-propagation
   namespace: arc-runners
 spec:
+  # 仅对下列两个显式命名资源接管已有副本（旧 PoC 手工创建过 Runner SA）。
+  conflictResolution: Overwrite
   resourceSelectors:
   - apiVersion: v1
     kind: Secret
     name: arc-github-secret
+  - apiVersion: v1
+    kind: ServiceAccount
+    name: karmada-runner-gha-rs-no-permission
   placement:
     clusterAffinity:
       clusterNames:
@@ -28,20 +33,24 @@ metadata:
   name: arc-listener-propagation
   namespace: arc-systems
 spec:
+  # 自动追踪 Pod 引用的 config Secret 和 karmada-token，避免绑定版本相关名称。
+  propagateDeps: true
   resourceSelectors:
   - apiVersion: v1
     kind: Pod
-    # 匹配 Listener Pod 名称前缀或完整名称
-    name: karmada-runner-fdfdcc69-listener
+    labelSelector:
+      matchLabels:
+        actions.github.com/scale-set-name: karmada-runner
+        actions.github.com/scale-set-namespace: arc-runners
   - apiVersion: v1
     kind: Secret
     name: karmada-token
   - apiVersion: v1
-    kind: Secret
-    name: karmada-runner-fdfdcc69-listener-config
-  - apiVersion: v1
     kind: ServiceAccount
-    name: karmada-runner-fdfdcc69-listener
+    labelSelector:
+      matchLabels:
+        actions.github.com/scale-set-name: karmada-runner
+        actions.github.com/scale-set-namespace: arc-runners
   placement:
     clusterAffinity:
       clusterNames:
@@ -49,8 +58,8 @@ spec:
 ---
 # 3. 核心机制 ③：Runner Pod 跨集群分摊调度与 JIT Secret 依赖自动穿透策略
 # - propagateDeps: true: Karmada 自动解析 Runner Pod 环境变量中通过 secretKeyRef
-#   引用的瞬时一次性 JIT 凭据 Secret，并与 Pod 强绑定原子下发至同一集群；
-# - replicaScheduling: Divided / Weighted: Karmada 调度器将并发到来的任务分摊至各成员集群。
+#   引用的瞬时一次性 JIT 凭据 Secret，并按 Pod 的 placement 下发依赖（非原子事务）；
+# - replicaScheduling: Divided / Weighted: 对每个 Pod 单独调度，不保证多个独立 Pod 均匀分布。
 apiVersion: policy.karmada.io/v1alpha1
 kind: PropagationPolicy
 metadata:
