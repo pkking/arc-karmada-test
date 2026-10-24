@@ -206,6 +206,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.1 US-01：按统一标签提交任务
 
+![US-01 按统一标签提交任务运行时序图](images/story-us-01-runtime-sequence.svg)
+
 **外部体验：** 工作流使用 `runs-on: karmada-runner` 提交 Job。业务方无需指定 member1 或 member2。
 
 **内部流程：** GitHub Actions 排队 → ARC Listener 匹配 Scale Set → 更新 EphemeralRunnerSet → Controller 创建 Runner。
@@ -213,6 +215,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 **检查：** 工作流 Label 匹配、Runner 已注册、Job 状态成功。参考 [真实 Run 38667994949](https://github.com/pkking/arc-karmada-test/actions/runs/38667994949)。
 
 ## 4.2 US-02：集中管理 Runner 生命周期
+
+![US-02 集中管理 Runner 生命周期运行时序图](images/story-us-02-runtime-sequence.svg)
 
 **外部体验：** 平台按任务需求创建临时 Runner。任务结束后按 ARC 生命周期回收。
 
@@ -222,6 +226,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.3 US-03：原生跨成员调度
 
+![US-03 原生跨成员调度运行时序图](images/story-us-03-runtime-sequence.svg)
+
 **外部体验：** 同一 Scale Set 的 Job 可在 member1 或 member2 运行。
 
 **内部流程：** PropagationPolicy 选择 Runner Pod → Detector 创建 ResourceBinding → Karmada Scheduler 选择成员 → Binding Controller 生成 Work → Execution Controller 下发成员。
@@ -229,6 +235,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 **检查：** [Run 38667994949](https://github.com/pkking/arc-karmada-test/actions/runs/38667994949) 三个 Job 成功，分布为 member1=2、member2=1。另一轮 [Run 38668853059](https://github.com/pkking/arc-karmada-test/actions/runs/38668853059) 三个 Job 全在 member1，证明逐轮覆盖不可保证。member2 的单独执行能力见 [Run 38669630663](https://github.com/pkking/arc-karmada-test/actions/runs/38669630663)。
 
 ## 4.4 US-04：JIT Secret 跟随 Runner
+
+![US-04 JIT Secret 跟随 Runner运行时序图](images/story-us-04-runtime-sequence.svg)
 
 **外部体验：** Runner 启动后正常注册并领取 Job，无需开发者管理一次性凭证。
 
@@ -238,6 +246,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.5 US-05：Listener 跨控制面认证
 
+![US-05 Listener 跨控制面认证运行时序图](images/story-us-05-runtime-sequence.svg)
+
 **外部体验：** Listener 持续响应任务需求；用户不感知控制面与成员集群的网络差异。
 
 **内部流程：** Listener Pod 下发 member1 → hostAliases 解析控制面名称 → 挂载 karmada-token 和 CA → InClusterConfig 指向 Karmada API → Role 允许 Patch EphemeralRunnerSet。
@@ -245,6 +255,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 **检查：** TLS SAN 校验成功；Karmada 鉴权成功；Role 事件反复触发调谐后 Listener UID 与配置 Secret RV 稳定。
 
 ## 4.6 US-06：Pod 状态正确回传
+
+![US-06 Pod 状态正确回传运行时序图](images/story-us-06-runtime-sequence.svg)
 
 **外部体验：** Runner Ready 状态正常，ARC 不会因状态字段缺失而误删 Runner。
 
@@ -254,6 +266,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.7 US-07：本轮资源自动清理
 
+![US-07 本轮资源自动清理运行时序图](images/story-us-07-runtime-sequence.svg)
+
 **外部体验：** Job 完成后不遗留本轮创建的临时 Runner 和 JIT Secret。
 
 **内部流程：** Job 结束 → ARC 更新 EphemeralRunner 状态并删除临时资源 → Karmada 处理绑定对象和成员资源回收 → 验证脚本按 UID 盘点。
@@ -261,6 +275,8 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 **检查：** [最终状态证据](evidence/arc-0.15.0-final-state.json)确认本轮 Runner Pod、EphemeralRunner、JIT Secret、关联 Binding / Work 无残留；历史 ERS Finalizer 未自动清理。
 
 ## 4.8 US-08：NPU 资源执行（待验证）
+
+![US-08 NPU 资源执行（待验证）运行时序图](images/story-us-08-runtime-sequence.svg)
 
 **外部行为（待验证）：** 工作流选择 NPU Runner 规格后，由兼容 NPU 节点执行计算任务。
 
