@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1850" height="1210" viewBox="0 0 1850 1210" role="img" aria-label="ARC 与 Karmada 联邦调度执行子系统部署图：控制面、成员集群及外部服务关系">
  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#475569"/></marker></defs><rect width="1850" height="1210" fill="#fff"/>
 <text x="925" y="63" fill="#1e293b" text-anchor="middle" font-size="40" font-weight="750" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">ARC + Karmada 联邦调度执行子系统部署架构</text>
-<text x="925" y="104" fill="#475569" text-anchor="middle" font-size="21" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">基于 2026-10-15 ARC 0.15.0 / Karmada v1.19.0 / Kubernetes v1.37.0 PoC</text>
+<text x="925" y="104" fill="#475569" text-anchor="middle" font-size="21" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">参考部署拓扑：ARC + Karmada + Kubernetes 版本和成员名称均为示例</text>
 <rect x="305" y="139" width="530" height="106" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
 <text x="570" y="168" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">运维终端 / 部署脚本</text>
 <text x="570" y="196" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Kind / kubectl / karmadactl / manifests</text>
@@ -86,6 +86,6 @@
 <text x="1366" y="1146" fill="#1e293b" text-anchor="start" font-size="17" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">已配置 / 适配</text>
 <rect x="1332" y="1160" width="25" height="22" rx="2" fill="#fce7f3" stroke="#ef6894" stroke-width="1.6"/>
 <text x="1366" y="1178" fill="#1e293b" text-anchor="start" font-size="17" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">新增/按需生成</text>
-<text x="42" y="1153" fill="#475569" text-anchor="start" font-size="17" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">只展示本轮使用或已验证的部署单元。</text>
-<text x="42" y="1182" fill="#475569" text-anchor="start" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">未包含可选 karmada-search、未实测 NPU 节点或生产级 HA。</text>
+<text x="42" y="1153" fill="#475569" text-anchor="start" font-size="17" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">图示组件位置是仓库配置示例，实际部署可参数化调整。</text>
+<text x="42" y="1182" fill="#475569" text-anchor="start" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">不包含 karmada-search；NPU、HA 等能力按部署需求另行设计。</text>
 </svg>
