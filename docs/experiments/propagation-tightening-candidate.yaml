@@ -1,0 +1,45 @@
+# SECURITY EXPERIMENT ONLY. DO NOT APPLY BY DEFAULT.
+# Prerequisites: docs/SECURITY-REVIEW.md and live test environment with rollback.
+# Based on the validated baseline policies, this candidate intentionally:
+# (1) stops explicitly propagating the master GitHub PAT/App secret;
+# (2) narrows the Runner Pod selection to the two scale-set labels.
+# These changes are unverified in a real ARC-Karmada E2E environment.
+apiVersion: policy.karmada.io/v1alpha1
+kind: PropagationPolicy
+metadata:
+  name: arc-secret-propagation
+  namespace: arc-runners
+spec:
+  conflictResolution: Overwrite
+  resourceSelectors:
+  - apiVersion: v1
+    kind: ServiceAccount
+    name: karmada-runner-gha-rs-no-permission
+  placement:
+    clusterAffinity:
+      clusterNames:
+      - member1
+      - member2
+---
+apiVersion: policy.karmada.io/v1alpha1
+kind: PropagationPolicy
+metadata:
+  name: arc-runner-pod-propagation
+  namespace: arc-runners
+spec:
+  resourceSelectors:
+  - apiVersion: v1
+    kind: Pod
+    labelSelector:
+      matchLabels:
+        actions.github.com/scale-set-name: karmada-runner
+        actions.github.com/scale-set-namespace: arc-runners
+  propagateDeps: true
+  placement:
+    clusterAffinity:
+      clusterNames:
+      - member1
+      - member2
+    replicaScheduling:
+      replicaSchedulingType: Divided
+      replicaDivisionPreference: Weighted
