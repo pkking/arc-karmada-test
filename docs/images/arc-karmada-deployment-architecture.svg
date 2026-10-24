@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1850" height="1210" viewBox="0 0 1850 1210" role="img" aria-label="ARC 与 Karmada 联邦调度执行子系统部署图：控制面、成员集群及外部服务关系">
+ <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#475569"/></marker></defs><rect width="1850" height="1210" fill="#fff"/>
+<text x="925" y="63" fill="#1e293b" text-anchor="middle" font-size="40" font-weight="750" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">ARC + Karmada 联邦调度执行子系统部署架构</text>
+<text x="925" y="104" fill="#475569" text-anchor="middle" font-size="21" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">基于 2026-10-15 ARC 0.15.0 / Karmada v1.19.0 / Kubernetes v1.37.0 PoC</text>
+<rect x="305" y="139" width="530" height="106" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="570" y="168" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">运维终端 / 部署脚本</text>
+<text x="570" y="196" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Kind / kubectl / karmadactl / manifests</text>
+<rect x="1230" y="139" width="430" height="106" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1445" y="168" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">镜像仓库</text>
+<text x="1445" y="196" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">ghcr.io / docker.io / registry.k8s.io</text>
+<rect x="20" y="652" width="235" height="218" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="137.5" y="681" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">GitHub Actions</text>
+<text x="137.5" y="709" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Job 匹配 / Runner 注册</text>
+<text x="137.5" y="735" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">分配任务 / 返回结果</text>
+<rect x="685" y="1071" width="486" height="105" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="928" y="1100" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">验证与审计</text>
+<text x="928" y="1128" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">verify-arc.py / evidence JSON / logs</text>
+<rect x="283" y="298" width="1380" height="733" rx="7" fill="#f6f9fc" stroke="#94a3b8" stroke-width="2.7"/>
+<text x="310" y="340" fill="#1e293b" text-anchor="start" font-size="29" font-weight="700" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">联邦调度执行系统（当前 PoC 部署范围）</text>
+<rect x="316" y="370" width="625" height="252" rx="7" fill="#f6f9fc" stroke="#a9b5c3" stroke-width="1.7"/>
+<text x="336" y="408" fill="#1e293b" text-anchor="start" font-size="24" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">宿主机 / Docker 运行环境</text>
+<rect x="970" y="370" width="657" height="252" rx="7" fill="#f6f9fc" stroke="#a9b5c3" stroke-width="1.7"/>
+<text x="990" y="408" fill="#1e293b" text-anchor="start" font-size="24" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">karmada-host（Kind 控制面）</text>
+<rect x="348" y="429" width="562" height="77" rx="5" fill="#ffedd5" stroke="#fa9238" stroke-width="1.8"/>
+<text x="629" y="475.5" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">官方 ARC Controller 0.15.0</text>
+<rect x="348" y="515" width="264" height="68" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="480" y="557" fill="#1e293b" text-anchor="middle" font-size="19" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">run-arc-controller.sh</text>
+<rect x="625" y="515" width="285" height="68" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="767.5" y="557" fill="#1e293b" text-anchor="middle" font-size="19" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">host network + kubeconfig</text>
+<rect x="994" y="429" width="605" height="77" rx="5" fill="#ffedd5" stroke="#fa9238" stroke-width="1.8"/>
+<text x="1296.5" y="475.5" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Karmada 控制面 API</text>
+<rect x="994" y="515" width="350" height="63" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1169" y="554.5" fill="#1e293b" text-anchor="middle" font-size="17" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">ARC CRD / RunnerSet / ERS / ER</text>
+<rect x="1357" y="515" width="242" height="63" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1478" y="554.5" fill="#1e293b" text-anchor="middle" font-size="18" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">PropagationPolicy</text>
+<rect x="994" y="585" width="605" height="28" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1296.5" y="607" fill="#1e293b" text-anchor="middle" font-size="15" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">ResourceInterpreterCustomization（完整 Pod 状态聚合）</text>
+<rect x="316" y="650" width="625" height="347" rx="7" fill="#f6f9fc" stroke="#a9b5c3" stroke-width="1.7"/>
+<text x="336" y="688" fill="#1e293b" text-anchor="start" font-size="24" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">member1（Kind / Kubernetes）</text>
+<rect x="970" y="650" width="657" height="347" rx="7" fill="#f6f9fc" stroke="#a9b5c3" stroke-width="1.7"/>
+<text x="990" y="688" fill="#1e293b" text-anchor="start" font-size="24" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">member2（Kind / Kubernetes）</text>
+<rect x="342" y="709" width="572" height="61" rx="5" fill="#fce7f3" stroke="#ef6894" stroke-width="1.8"/>
+<text x="628" y="747.5" fill="#1e293b" text-anchor="middle" font-size="22" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">ARC Listener Pod（arc-systems）</text>
+<rect x="342" y="779" width="572" height="57" rx="5" fill="#ffedd5" stroke="#fa9238" stroke-width="1.8"/>
+<text x="628" y="815.5" fill="#1e293b" text-anchor="middle" font-size="19" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Karmada Token / CA 与 hostAliases 适配</text>
+<rect x="342" y="845" width="572" height="58" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="628" y="882" fill="#1e293b" text-anchor="middle" font-size="21" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner Pod（arc-runners）</text>
+<rect x="342" y="915" width="272" height="58" rx="5" fill="#fce7f3" stroke="#ef6894" stroke-width="1.8"/>
+<text x="478" y="952" fill="#1e293b" text-anchor="middle" font-size="21" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">JIT Secret</text>
+<rect x="626" y="915" width="288" height="58" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="770" y="952" fill="#1e293b" text-anchor="middle" font-size="20" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner ServiceAccount</text>
+<rect x="998" y="709" width="604" height="65" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1300" y="749.5" fill="#1e293b" text-anchor="middle" font-size="23" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner Pod（arc-runners）</text>
+<rect x="998" y="789" width="288" height="64" rx="5" fill="#fce7f3" stroke="#ef6894" stroke-width="1.8"/>
+<text x="1142" y="829" fill="#1e293b" text-anchor="middle" font-size="22" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">JIT Secret</text>
+<rect x="1298" y="789" width="304" height="64" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1450" y="829" fill="#1e293b" text-anchor="middle" font-size="20" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner ServiceAccount</text>
+<rect x="998" y="868" width="604" height="63" rx="5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>
+<text x="1300" y="907.5" fill="#1e293b" text-anchor="middle" font-size="19" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">成员原生 Kubernetes 调度与执行</text>
+<polyline points="570,245 570,277 620,277 620,370" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<text x="415" y="282" fill="#1e293b" text-anchor="start" font-size="16" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">创建 Kind 集群 / 启动 Controller</text>
+<polyline points="835,190 1115,190 1115,298" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<text x="955" y="220" fill="#1e293b" text-anchor="start" font-size="16" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">应用 CRD、RBAC、策略与 RunnerSet</text>
+<polyline points="1230,190 1190,190 1190,298" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<text x="1523" y="278" fill="#475569" text-anchor="end" font-size="17" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">提供 ARC / Karmada / Runner 镜像</text>
+<line x1="910" y1="467" x2="994" y2="467" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="955" y="442" fill="#1e293b" text-anchor="middle" font-size="15" font-weight="500" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">控制面 kubeconfig</text>
+<polyline points="1098,622 1098,636 640,636 640,709" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<text x="845" y="634" fill="#1e293b" text-anchor="middle" font-size="15" font-weight="500" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Listener 定向放置 + 依赖传播</text>
+<polyline points="1475,622 1475,709" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<text x="1510" y="643" fill="#1e293b" text-anchor="middle" font-size="16" font-weight="500" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner Pod + JIT</text>
+<polyline points="914,739 952,739 952,487 994,487" stroke="#475569" stroke-width="2.25" fill="none" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+<text x="945" y="697" fill="#1e293b" text-anchor="middle" font-size="16" font-weight="500" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Token / CA</text>
+<line x1="255" y1="742" x2="342" y2="742" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="270" y="727" fill="#1e293b" text-anchor="start" font-size="15" font-weight="500" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">任务 / Scale Set 会话</text>
+<line x1="342" y1="869" x2="255" y2="869" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="272" y="854" fill="#1e293b" text-anchor="start" font-size="15" font-weight="500" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner 状态 / 结果</text>
+<text x="972" y="969" fill="#475569" text-anchor="start" font-size="17" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">Runner 使用成员集群原生网络直接连接 GitHub</text>
+<text x="972" y="994" fill="#475569" text-anchor="start" font-size="15" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">（不使用跨集群 Pod 网络隧道）</text>
+<polyline points="785,1031 785,1051 765,1051 765,1071" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<polyline points="1293,1031 1293,1051 1101,1051 1101,1071" stroke="#475569" stroke-width="2.25" fill="none" marker-end="url(#arrow)"/>
+<text x="1296" y="1067" fill="#1e293b" text-anchor="start" font-size="15" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">采集状态 / 日志 / 清理证据</text>
+<rect x="1332" y="1096" width="25" height="22" rx="2" fill="#fff" stroke="#94a3b8" stroke-width="1.6"/>
+<text x="1366" y="1114" fill="#1e293b" text-anchor="start" font-size="17" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">复用 / 现有</text>
+<rect x="1332" y="1128" width="25" height="22" rx="2" fill="#ffedd5" stroke="#fa9238" stroke-width="1.6"/>
+<text x="1366" y="1146" fill="#1e293b" text-anchor="start" font-size="17" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">已配置 / 适配</text>
+<rect x="1332" y="1160" width="25" height="22" rx="2" fill="#fce7f3" stroke="#ef6894" stroke-width="1.6"/>
+<text x="1366" y="1178" fill="#1e293b" text-anchor="start" font-size="17" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">新增/按需生成</text>
+<text x="42" y="1153" fill="#475569" text-anchor="start" font-size="17" font-weight="450" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">只展示本轮使用或已验证的部署单元。</text>
+<text x="42" y="1182" fill="#475569" text-anchor="start" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">未包含可选 karmada-search、未实测 NPU 节点或生产级 HA。</text>
+</svg>
