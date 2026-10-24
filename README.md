@@ -180,7 +180,7 @@ kind create cluster --name member2 --image="${KIND_NODE_IMAGE}"
 
 #### 1.2 在 karmada-host 上初始化 Karmada
 
-本机开发版 `karmadactl` 的默认镜像/CRD 指向 `v0.0.0-master`，不能直接使用无版本参数的 `init`。以下显式对齐现有环境的组件版本；本次回归复用了已有集群，**没有重建集群验证完整初始化流程**，使用其他 CLI 版本时先核对 `karmadactl init --help`：
+本机开发版 `karmadactl` 的默认镜像/CRD 指向 `v0.0.0-master`，不能直接使用无版本参数的 `init`。以下显式对齐现有环境的组件版本：2026-10-15 的原始 PoC 回归复用了既有 Kind 集群；随后 2026-10-24 的 [Fresh Kind Bootstrap CI](https://github.com/pkking/arc-karmada-test/actions/runs/40111697216) **已从空环境验证三个 Kind 集群创建、Karmada 控制面初始化、成员加入、ARC CRD 安装及 Manifest 服务端 dry-run**，但**没有**完成真实 ARC Runner 和 GitHub Job 的全新环境 E2E。使用其他 CLI 版本时先核对 `karmadactl init --help`：
 
 ```bash
 KARMADA_VERSION="v1.19.0"
