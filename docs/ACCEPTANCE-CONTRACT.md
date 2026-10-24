@@ -30,7 +30,7 @@
 |---|---|---|---|---|
 | **US-01** 统一标签 | Workflow 三 Job 均请求 `karmada-runner`；GitHub 匹配到 Runner；Job 成功 | [workflow](../.github/workflows/test-arc.yml)、[RunnerSet](../manifests/04-autoscalingrunnerset.yaml)、Listener | [Run 38667994949](https://github.com/pkking/arc-karmada-test/actions/runs/38667994949)、`verify-arc.py --dispatch` | T1 已验证 |
 | **US-02** 生命周期 | 任务需求引出 ER/Runner Pod/JIT；执行后本轮临时对象被回收 | [RunnerSet](../manifests/04-autoscalingrunnerset.yaml)、[Controller 启动脚本](../scripts/run-arc-controller.sh)、官方 ARC | [运行验证](arc-0.15.0-validation.md)、[本轮收尾证据](evidence/arc-0.15.0-final-state.json) | T1 已验证本轮 |
-| **US-03** 多成员执行 | T1：Job 成功；T2：member1 和 member2 分别定向运行成功。**不得断言每轮必须 2:1** | [传播策略](../manifests/02-propagation-policies.yaml)、Karmada 上游 | [2:1](evidence/arc-0.15.0-multicluster.json)、[3:0 覆盖不足](evidence/arc-0.15.0-single-cluster-coverage-failed.json)、[member2 定向](evidence/arc-0.15.0-directed-member2.json) | T1/T2 的既有证据充分；T3 未验证 |
+| **US-03** 多成员执行 | T1：Job 成功；T2：member1 和 member2 分别定向运行成功。**不得断言每轮必须 2:1** | [传播策略](../manifests/02-propagation-policies.yaml)、Karmada 上游 | [2:1](evidence/arc-0.15.0-multicluster.json)、[3:0 覆盖不足](evidence/arc-0.15.0-single-cluster-coverage-failed.json)、[member2 定向](evidence/arc-0.15.0-directed-member2.json) | T1 和两个成员实际执行能力有既有证据；完整 T2（两侧分别定向）尚需补 member1 定向演练；T3 未验证 |
 | **US-04** JIT 依赖 | 每个 Runner 引用的 JIT Secret 在其执行成员可见，Runner Ready；短暂 FailedMount 可恢复；结束后删除 | [RunnerSet](../manifests/04-autoscalingrunnerset.yaml)、[propagateDeps](../manifests/02-propagation-policies.yaml) | `verify-arc.py` 采样字段 `readyWithSecrets`、[运行验证](arc-0.15.0-validation.md) | T1 已验证 |
 | **US-05** Listener 认证 | Listener 访问 Karmada API，Role 事件反复调谐后 UID/config Secret RV 稳定，Token/CA/RBAC 正确；不包含自动轮换验证 | [RBAC](../manifests/03-rbac.yaml)、[Token](../scripts/setup-karmada-token.sh)、[RunnerSet](../manifests/04-autoscalingrunnerset.yaml) | `verify-arc.py` `listenerStabilityPassed`、[定向验证](evidence/arc-0.15.0-directed-member2.json) | T1 已验证 PoC 稳定窗口 |
 | **US-06** Pod 状态 | Karmada 控制面能看到 Runner 容器名 `runner`、状态和 Ready 条件；当前仅单目标成员 | [Lua Interpreter](../manifests/01-karmada-interpreter.yaml) | `verify-arc.py` `namedStatusOnControlPlane`、[验证记录](arc-0.15.0-validation.md) | T1 已验证；多副本聚合未验证 |
@@ -62,6 +62,8 @@ python3 scripts/verify-arc.py --dispatch --coverage-mode require --duration 180 
 python3 scripts/verify-arc.py --dispatch --required-contexts kind-member1 --coverage-mode require \
   --output /tmp/arc-015-validation/t2-member1.json
 ~~~
+
+**现有证据范围：** member1 已在正常工作流中实际执行，member2 已在定向运行中实际执行；尚无单独的 member1 定向验收记录，因此严格按本文件的 T2 定义，完整双向定向矩阵**仍需补测**。
 
 **T2 member2** 同样使用 `--required-contexts kind-member2`，结束必须恢复 `clusterNames: [member1, member2]`，并采集恢复后的稳定性/最终状态。若没有凭证、集群或 Runner 镜像，这些命令**不可假定已执行成功**。
 
