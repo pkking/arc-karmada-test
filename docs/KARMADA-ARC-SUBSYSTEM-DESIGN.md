@@ -3,7 +3,7 @@
 
 > 版本：1.0  
 > 日期：2026-10-24  
-> 文档状态：架构说明与实现映射；**不是生产部署验收报告**。  
+> 文档状态：架构说明与实现映射；不作为生产部署验收依据。  
 > 主要实现仓库：opensourceways/arc-fedsched；基础接入 PoC：pkking/arc-karmada-test。
 
 ## 本文档的定位
@@ -122,7 +122,7 @@ flowchart LR
 | 资源组织 | 按项目静态绑定到 Region / Cluster | 同一 federation 内按硬件兼容性和策略共享 |
 | 队列视角 | 各项目 / 集群局部排队 | Dispatcher 在 federation 范围内统一决策 |
 | 资源选择 | 由静态归属决定 | 按声明需求、可用容量和策略动态选择 |
-| 资源错配 | 局部排队与其他集群空闲可能并存 | 可以使用其他合格成员的可用容量 |
+| 资源错配 | 局部排队与其他集群空闲可能并存 | 可使用其他合格成员的可用容量 |
 | 用户感知 | 须了解集群归属和差异 | 主要通过 Runner 规格提交任务 |
 | 运营能力 | 分散核算，难以比较全局供需 | 统一观测容量、grants、等待原因和调度结果 |
 
@@ -138,7 +138,9 @@ flowchart TB
     D --> RB["ResourceBinding"]
 
     subgraph CP["联邦控制面"]
-        RB --> DISP["arc-fedsched Dispatcher"]
+        RB -->|"基础模式"| KS["Karmada stock scheduler"]
+        KS -->|"选择成员"| RB
+        RB -->|"schedulerName=arc-dispatcher"| DISP["arc-fedsched Dispatcher"]
         DISP --> SP["State Provider"]
         SP --> LED["Ledger 容量账本"]
         LED --> POL["Policy 策略"]
@@ -221,7 +223,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 
 ### US-02：平台识别任务的 NPU 类型与数量
 
-**用户故事：** 作为平台工程师，我希望每个 Runner Scale Set 声明其工作负载需要的 NPU 类型与数量，并让该需求在 Karmada 控制面可见，用于调度决策使用一致的资源模型。
+**用户故事：** 作为平台工程师，我希望每个 Runner Scale Set 声明工作负载所需的 NPU 类型与数量，并在 Karmada 控制面公开该需求，确保调度使用统一的资源模型。
 
 **场景：**
 - 正常场景：Scale Set 的需求注解随 ARC 对象链路传递；Karmada 的资源解释器将声明需求写入 ResourceBinding 的 replicaRequirements，Dispatcher 读取同一份声明。
@@ -252,7 +254,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 
 ### US-04：准确核算容量，防止超分与重复计数
 
-**用户故事：** 作为调度器维护者，我希望每个节点的可用 NPU 容量同时考虑已实际占用资源、尚未落地的已释放 Runner、其他租户负载和硬件分配粒度，用于调度器不会把同一份容量承诺给多个任务。
+**用户故事：** 作为调度器维护者，我希望每个节点的可用 NPU 容量纳入实际占用、已释放但尚未落地的 Runner、其他租户负载和硬件分配粒度，防止同一份容量被重复承诺。
 
 **场景：**
 - Runner 已释放但工作负载 Pod 尚未创建：打开 in-flight grant，先为声明需求记账。
@@ -268,7 +270,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 > free(node) = max(0, allocatable(node) - non_terminal_physical_demand(node) - open_grants(node) - background_load(node))
 
 - 以上各项统一使用按 federation 分配粒度取整后的单位。
-- grant 在释放成功后打开，而不是在 PATCH 前打开；正常物化、终止、取消、删除或超时信号到来时关闭，TTL / hook window 作为兜底而不是唯一的容量回收手段。
+- RB 释放成功后打开 grant。正常物化、终止、取消、删除或超时信号到来时关闭 grant；TTL / hook window 仅作兜底。
 - 账本重建必须基于完整快照；新 Leader 在重建 grant 前不得恢复放量。
 - maxPerCluster 等限制用于控制尚未落地的承诺量；达到上限时应延迟后续释放。
 
@@ -279,7 +281,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 **场景：**
 - 正常场景：策略在可用节点中选择目标成员；若启用 estimator，则使用准确资源需求交叉核验；通过后才释放 RB。
 - 并发场景：Dispatcher 两个副本、重试或其他控制器同时修改 RB；系统通过重新读取对象、resourceVersion 前置条件和 UID / placement 检查拒绝覆盖不兼容的并发修改。
-- 重复场景：RB 已被释放时，重复调用应识别为已放置并恢复已有 grant 账目，而不是再执行一次放置。
+- 重复场景：RB 已释放时，重复调用返回已放置状态，并恢复已有 grant 账目。
 - 目标失效场景：成员读失败、NotReady 或状态过期时，本轮不应继续向该成员放量。
 
 **验收条件：**
@@ -349,7 +351,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 - 单任务排障：按 runner / RB 关联队列进入、释放、Runner 绑定、工作负载启动、资源释放等时间线。
 - 队列排障：按 hold reason、成员 staleness、open grants、background load、节点 free units 和 reservation 状态定位瓶颈。
 - 策略变更：先用同一批输入 trace 和容量模型执行 Python 模拟、Go replay 与差分测试，再决定是否进入实际流量验证。
-- 影子运行：比较策略会如何决策，同时继续以安全的 FIFO / first-fit 驱动释放；不启用节点预留。
+- 影子运行对比策略输出。实际释放仍由 FIFO / first-fit 执行，不启用节点预留。
 - 结果复核：查看等待分布、头部阻塞、backfill、grant timeout、estimator disagreement 和节点利用率指标。
 
 **验收条件：**
@@ -380,7 +382,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 | 质量属性 | 设计要求 | 机制与限制 |
 |---|---|---|
 | 安全性 | 最小权限；Runner 运行身份不应拥有 Kubernetes 管理权限；JIT / Karmada Token 不进入日志 | Listener 使用独立控制面凭据与资源名受限的 Role；Dispatcher 对控制面 Cluster Proxy 和成员 Node 写权限分别授权；Estimator 若启用客户端 CA 校验，必须配置匹配证书。PoC 中的管理凭据不能直接作为生产权限基线 |
-| 性能 | 调度循环可预测；容量核算不依赖高延迟全量 API 轮询 | 优先使用 karmada-search informer；不支持的成员可用 proxy polling；默认 reconcile / decision interval 为 15 秒且硬上限 30 秒。该间隔是设计配置，不等于已测得的端到端调度 SLA |
+| 性能 | 调度循环可预测；容量核算避免高延迟全量 API 轮询 | 优先使用 karmada-search informer；其他成员可用 proxy polling。默认 reconcile / decision interval 为 15 秒，硬上限为 30 秒。该值是设计配置，尚非端到端 SLA 测量结果 |
 | 可靠性 | 不以不完整或过期观测继续放量；领导权切换后恢复一致账本 | Lease、epoch、冷启动重建、readiness gate、grant 重建、RB resourceVersion 前置条件；Watchdog、Janitor、Reaper 提供不同层次的恢复 |
 | 可恢复性 | 故障后可回收遗留 reservation 和工作负载 | reservation 有短租约；Janitor 跨两次观测确认过期；Reaper 有 grace period；超时动作与回收原因有指标 |
 | 可解释性 | 每个 hold、release、reservation 和删除都有可观测原因 | Prometheus、JSONL decision trace、hold-reason stream、runner timeline、debug endpoints；敏感字段需要按内部运行数据保护 |
@@ -411,7 +413,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 | Reservation Janitor | pkg/janitor | 清理 Dispatcher 已失效后遗留的 reservation taint | 成员侧周期扫描；对同一 reservation-until 连续两轮确认后清理 | 可靠性：时钟偏差保护；安全：只处理符合本调度模块 taint 契约的节点；性能：周期扫描开销可控 |
 | Orphan Reaper | pkg/reaper | 清理跨集群后 ARC 控制面无法直接看见或回收的 workflow / step Pod 孤儿 | 在成员集群按 namespace 扫描；结合 runner 标签、Pod 命名形态、缺失窗口和 grace period 判断 | 可靠性：防止误删活跃任务；安全：缩小可删除对象范围；性能：按 namespace / 周期扫描 |
 | Metrics / Timeline / Trace | pkg/metrics、pkg/dispatcher、pkg/config | 解释排队、容量、放置、grant、reservation、成员 staleness 和故障恢复过程 | Prometheus 指标；JSONL job record / decision trace / hold reasons；stdout timeline 与受限 debug view | 可解释性：按任务追踪；安全：避免公开仓库或普通日志泄露工作负载身份；性能：文件轮转、debug ring 有界 |
-| 模拟与差分验证 | sim/、pkg/engine、pkg/replay、test/ | 使策略改动可以在真实流量窗口重放并比较，而不必每次直接在生产集群试错 | Python reference simulator、Go replay、golden fixtures、invariant tests、livediff、可选真实 trace 校准 | 正确性：防止策略漂移；可维护性：固定输入复现；限制：合成容量模型不能证明真实集群绝对等待时间 |
+| 模拟与差分验证 | sim/、pkg/engine、pkg/replay、test/ | 支持在真实流量窗口重放和比较策略，减少直接在生产集群试错 | Python reference simulator、Go replay、golden fixtures、invariant tests、livediff、可选真实 trace 校准 | 正确性：防止策略漂移；可维护性：固定输入复现；限制：合成容量模型不能证明真实集群绝对等待时间 |
 
 ## 3.2 核心数据模型
 
@@ -423,7 +425,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 | Grant | 已释放但实际资源占用尚未完整反映到节点 / Pod 观测中的承诺量 | 释放成功后打开；通过观测信号关闭；TTL 仅是兜底；受每成员上限约束 |
 | Reservation | 为头部任务暂时保护的成员节点 | 包含 federation / group / head / expiry 等信息；必须有上限、续租、释放和 janitor 清理路径 |
 | Snapshot | 一轮决策使用的不可变状态视图 | 账本、超时判断与策略必须读取同一快照；不完整成员不能被当作零占用 |
-| Decision / Outcome | 策略选择、被 hold 的原因、释放结果和预留变更 | 同时用于运行时指标、调试轨迹与离线回放 |
+| Decision / Outcome | 策略选择、hold 原因、释放结果和预留变更 | 用于运行时指标、调试轨迹和离线回放 |
 
 ## 3.3 关键设计机制
 
@@ -433,7 +435,7 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 
 ### 3.3.2 用声明需求弥补 Runner Pod 与工作负载 Pod 的资源差异
 
-NPU 工作负载可能由 runner-container-hooks 在成员集群创建，而不是直接运行在 Runner Pod 中。因此，资源解释器需要将 Scale Set 上的声明需求转换为 Karmada RB 可见的 replicaRequirements。真实工作负载 Pod 出现后，账本再以实际请求修正 grant。若仅统计已存在的工作负载 Pod，会在 Pod 创建前低估承诺量。
+runner-container-hooks 可能在成员集群创建 NPU 工作负载 Pod。资源解释器将 Scale Set 声明需求写入 Karmada RB 的 `replicaRequirements`。工作负载 Pod 出现后，账本按实际请求修正 grant。只统计已存在的工作负载 Pod，会低估创建前的资源承诺。
 
 ### 3.3.3 用 Ledger + Grant 解决异步物化
 
@@ -445,7 +447,7 @@ Holder 重新读取 RB 并检查 UID、placement、replicas 与当前状态，�
 
 ### 3.3.5 用 reservation + backfill 缓解头部阻塞
 
-默认策略 fifo-reserve-node 会在满足延迟门槛且头部任务没有可立即使用的候选节点时，选择可能在可接受时间内释放容量的节点作为预留目标。未被预留的容量仍可执行合适的后续任务。预留不是无限期锁定：它受容量阈值、同组规则、每成员节点预算、租约、外部占用监控和清理机制约束。
+默认策略 `fifo-reserve-node` 在达到延迟门槛且头部任务没有可用节点时，选择预计能及时释放容量的节点。后续任务仍可使用未预留容量。预留有明确期限，并受容量阈值、同组规则、每成员节点预算、外部占用监控和清理机制约束。
 
 ### 3.3.6 用 Lease 与恢复组件处理控制面故障
 
@@ -458,21 +460,21 @@ Dispatcher 通过 Lease 管理领导权；每轮写入绑定当前 epoch，tick 
 - Listener 的控制面 Token 应只允许操作对应 Scale Set / EphemeralRunner 所需资源；Runner 执行身份不应继承 Listener 的控制面权限。
 - Dispatcher 的权限应按 federation 限定控制面 Cluster Proxy 的资源范围，并按需授予成员节点读写和 Pod 读取权限；不应使用集群管理员凭据作为长期部署方案。
 - JIT Secret 通过依赖传播到实际运行 Runner 的成员集群；日志、JSONL 轨迹和调试接口不得输出 Secret Data、Token 或认证材料。
-- Estimator 如启用客户端 CA 校验，应同时配置有效客户端证书和私钥；不应把连接超时或跳过检查误解为资源可用。
+- Estimator 启用客户端 CA 校验时，配置有效客户端证书和私钥。连接超时或跳过检查时，不得将资源判定为可用。
 - 节点 taint 是影响成员集群调度的控制面写操作，必须通过 Actuator 的 guardrails、最小 RBAC 和显式 kill switch 执行。
 
 ### 性能
 
 - 默认配置将 reconcile 与 decision grid 对齐，示例为 15 秒，配置校验拒绝超过 30 秒的 reconcile 周期。缩短周期可降低反应延迟，但会增加观测、写入和调度器负载。
-- 对可建立 informer 的成员优先使用 karmada-search；Pull / NAT 等成员可使用 cluster-proxy polling，但需要接受更高的观测成本和延迟。
+- 优先对支持的成员使用 karmada-search informer。Pull / NAT 等成员使用 cluster-proxy polling；这类成员的观测成本和延迟更高。
 - 节点级账本与 grant 上限用于避免重复承诺；Estimator 交叉核验有单次超时并且默认关闭，必须根据实际可用性与测量结果决定是否启用。
 - 等待时间、吞吐量和利用率必须基于真实工作流 trace 与真实容量校准；合成 clusters 文件只用于机制测试，不代表生产容量。
 
 ### 可靠性
 
-- 任何一次快照读取失败都必须保留失败状态和 staleness，而不是返回“空集”并误判资源充足。
+- 快照读取失败时保留失败状态和 staleness。不得将失败结果转换为空列表。
 - Leader 切换后必须重新构建 grant 与 reservation 视图；readiness gate 未打开前不释放任务。
-- RB 释放和 grant 打开遵循“先成功写入 RB，再打开 grant”的顺序；重复释放应恢复已有 grant，而不是重复预订。
+- RB 释放成功后再打开 grant。重复释放时恢复已有 grant，避免重复预订。
 - reservation 通过短租约和 Janitor 清理；Runner / placement / registration 超时由 Timeout Evaluator 与 Holder 处理；Reaper 以安全的缺失观察窗口删除孤儿工作负载。
 - break-glass 的目标是恢复可用性，但它与 Dispatcher 的并发写入边界必须用实际 Karmada 版本、RB 状态和故障注入测试证明；当前代码实现不应被解读为已经完成所有生产故障场景验收。
 
@@ -495,19 +497,24 @@ sequenceDiagram
     participant L as ARC Listener
     participant ARC as ARC Controller
     participant KD as Karmada Detector
+    participant RB as ResourceBinding
+    participant KS as Karmada Scheduler
     participant DISP as Dispatcher
     participant BC as Binding Controller
     participant MC as 成员集群
     WF->>L: 按 runs-on 匹配 Scale Set
     L->>ARC: 更新 Runner 需求
     ARC->>KD: 创建 Runner 相关资源
-    KD->>BC: 创建 ResourceBinding
+    KD->>RB: 创建 ResourceBinding
     alt 基础 ARC + Karmada
-        BC->>MC: 按 PropagationPolicy 分发
+        KS->>RB: 选择成员并写入 placement
+        RB-->>BC: 提供已放置的 RB
+        BC->>MC: 创建 Work 并分发 Runner
     else arc-fedsched
-        KD-->>DISP: 提供待调度 RB
+        RB-->>DISP: 提供待调度 RB
         DISP->>DISP: 核算容量并选择成员
-        DISP->>BC: 写入目标 spec.clusters
+        DISP->>RB: 条件写入 spec.clusters
+        RB-->>BC: 提供已放置的 RB
         BC->>MC: 创建 Work 并分发 Runner
     end
     MC-->>WF: Runner 执行任务
@@ -644,7 +651,7 @@ sequenceDiagram
     H->>RB: 读取并检查 UID / placement / resourceVersion
     H->>RB: 条件 PATCH spec.clusters 与 grant 元数据
     alt PATCH 成功
-        RB-->>BC: 通知已放置状态
+        RB-->>BC: 更新为已放置状态
         BC->>MC: 创建 Work 并分发 Runner
     else 冲突或已被放置
         H-->>DISP: 返回 Conflict / AlreadyPlaced
@@ -708,7 +715,8 @@ sequenceDiagram
     participant REP as Reaper
     participant JAN as Janitor
     TE->>H: 删除取消、过期或失效 Runner
-    H-->>LED: 关闭关联 grant
+    H-->>ENG: 返回 Runner 删除结果
+    ENG->>LED: 关闭关联 grant
     ENG->>ACT: 释放 head 已消失的 reservation
     REP->>REP: 扫描并清理孤儿工作负载 Pod
     JAN->>JAN: 清理已过期节点 taint
