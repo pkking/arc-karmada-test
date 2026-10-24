@@ -6,7 +6,7 @@
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
 
-系统边界、Before / After 对比、联邦架构、用户故事及实测证据见[《ARC + Karmada 联邦调度执行子系统设计与验证说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。独立 Agent/开发者在修改 Manifest 或脚本前，还应阅读[实现契约](docs/IMPLEMENTATION-CONTRACT.md)、[验收契约与追踪矩阵](docs/ACCEPTANCE-CONTRACT.md)和[Agent 开发规范](AGENTS.md)。这些文件约束当前 PoC 行为，**不代表全新 Kind 环境重建或生产能力已通过验证**。 安全变更和重建条件另见[凭证传播审查](docs/SECURITY-REVIEW.md)、[干净环境重建验收清单](docs/REBUILD-VALIDATION.md)。
+系统目标、Before / After、逻辑/部署架构及 US-01～US-08 的设计见[《ARC + Karmada 联邦调度执行子系统设计说明书》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。**设计文档仅以 ARC/Karmada/Kubernetes/GitHub Actions 的官方组件文档和集成决策为依据，不要求 PoC 或运行证据**；请参见[官方依据矩阵](docs/UPSTREAM-SOURCE-MATRIX.md)、[接口与资源设计契约](docs/IMPLEMENTATION-CONTRACT.md)、[设计评审与完成准则](docs/ACCEPTANCE-CONTRACT.md)和[Agent 工作规范](AGENTS.md)。本 README 是独立的 PoC/实现操作指南，若需工程 E2E 测试另见[工程测试计划](docs/ENGINEERING-TEST-PLAN.md)、[安全审查](docs/SECURITY-REVIEW.md)和[重建记录](docs/REBUILD-VALIDATION.md)；这些并非设计审核条件。
 
 ---
 
