@@ -30,6 +30,18 @@ def get(*args):
     return json.loads(command(*args))
 
 
+def evaluate_cluster_coverage(mode, required_contexts, observed_contexts):
+    """Return (observed_coverage, accepted_for_this_mode).
+
+    T1 accepts a successful functional run on one member but records its
+    distribution. Default and directed T2 tests preserve the coverage gate.
+    """
+    if mode not in ("require", "report-only"):
+        raise ValueError("unknown coverage mode")
+    covered = set(required_contexts).issubset(set(observed_contexts))
+    return covered, (mode == "report-only" or covered)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kubeconfig", default=os.path.expanduser("~/karmada-data/karmada-apiserver.config"))
@@ -157,7 +169,9 @@ def main():
         report["listenerStabilityPassed"] = True
         if args.dispatch:
             report["workflowPassed"] = run_success
-            report["clusterCoveragePassed"] = required_contexts.issubset({r["context"] for r in report["runners"].values()})
+            report["clusterCoveragePassed"], coverage_accepted = evaluate_cluster_coverage(
+                args.coverage_mode, required_contexts, {r["context"] for r in report["runners"].values()}
+            )
             report["cleanupPassed"] = run_success and not remaining
             assert run_success, "Workflow did not complete successfully within duration"
             assert len(report["runners"]) >= 3, "Did not observe three Runner Pods"
@@ -168,8 +182,7 @@ def main():
             report["functionalPassed"] = True
             # T1 reports but does not require one run to cover both members.
             # Legacy/default and directed T2 runs explicitly require coverage.
-            if args.coverage_mode == "require":
-                assert report["clusterCoveragePassed"], "Did not observe Runner Pods on every required member context"
+            assert coverage_accepted, "Did not observe Runner Pods on every required member context"
         report["passed"] = True
     except Exception as error:
         report["error"] = str(error)
