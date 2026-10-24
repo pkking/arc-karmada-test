@@ -16,7 +16,7 @@
 <text x="928" y="1100" fill="#1e293b" text-anchor="middle" font-size="25" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">验证与审计</text>
 <text x="928" y="1128" fill="#475569" text-anchor="middle" font-size="16" font-weight="400" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">verify-arc.py / evidence JSON / logs</text>
 <rect x="283" y="298" width="1380" height="733" rx="7" fill="#f6f9fc" stroke="#94a3b8" stroke-width="2.7"/>
-<text x="310" y="340" fill="#1e293b" text-anchor="start" font-size="29" font-weight="700" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">联邦调度执行系统（当前 PoC 部署范围）</text>
+<text x="310" y="340" fill="#1e293b" text-anchor="start" font-size="29" font-weight="700" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">联邦调度执行系统（参考部署范围）</text>
 <rect x="316" y="370" width="625" height="252" rx="7" fill="#f6f9fc" stroke="#a9b5c3" stroke-width="1.7"/>
 <text x="336" y="408" fill="#1e293b" text-anchor="start" font-size="24" font-weight="650" font-family="Microsoft YaHei,Noto Sans CJK SC,PingFang SC,Arial,sans-serif">宿主机 / Docker 运行环境</text>
 <rect x="970" y="370" width="657" height="252" rx="7" fill="#f6f9fc" stroke="#a9b5c3" stroke-width="1.7"/>
