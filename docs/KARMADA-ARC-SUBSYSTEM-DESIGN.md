@@ -206,7 +206,30 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.1 US-01：按统一标签提交任务
 
-![US-01 按统一标签提交任务运行时序图](images/story-us-01-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(232,243,255) 用户与任务入口
+        actor Dev as 开发者
+        participant GH as GitHub Actions
+    end
+    box rgb(255,240,222) ARC Runner 管理
+        participant L as ARC Listener
+        participant ERS as EphemeralRunnerSet
+        participant C as ARC Controller
+    end
+    participant K as Karmada API
+
+    Dev->>GH: 提交工作流 runs-on karmada-runner
+    GH->>GH: Job 进入匹配的 Scale Set 队列
+    L->>GH: 维持单一 Listener 会话并获取任务需求
+    GH-->>L: 返回分配给 Scale Set 的 Job 需求
+    L->>ERS: Patch 期望 Runner 副本数
+    C->>ERS: Watch 并调谐期望与实际副本
+    C->>K: 创建 EphemeralRunner 与 Runner Pod
+    Note over Dev,K: 统一 Runner 标签屏蔽 member1 和 member2，后续由 Karmada 选择成员
+    Note over L,GH: 单 Listener 会话是当前原型方案，不代表全平台只有一个 GitHub 连接
+```
 
 **外部体验：** 工作流使用 `runs-on: karmada-runner` 提交 Job。业务方无需指定 member1 或 member2。
 
@@ -216,7 +239,37 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.2 US-02：集中管理 Runner 生命周期
 
-![US-02 集中管理 Runner 生命周期运行时序图](images/story-us-02-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(232,243,255) 外部任务入口
+        participant GH as GitHub Actions
+    end
+    box rgb(255,240,222) ARC 生命周期
+        participant L as ARC Listener
+        participant ERS as EphemeralRunnerSet
+        participant C as ARC Controller
+    end
+    box rgb(231,249,239) 联邦执行
+        participant K as Karmada 控制面
+        participant Pod as 成员 Runner Pod
+    end
+
+    GH-->>L: 下发已匹配 Scale Set 的任务需求
+    L->>ERS: 调整期望临时 Runner 副本数
+    C->>ERS: 监听 ERS 变更
+    C->>K: 创建 EphemeralRunner 和 Runner Pod
+    C->>K: 创建 JIT 注册凭证 Secret
+    K->>Pod: 下发 Runner Pod 及依赖对象
+    Pod->>GH: 使用 JIT 凭证注册临时 Runner
+    GH-->>Pod: 分配并执行 Job
+    Pod-->>GH: 回传 Job 状态及日志
+    GH-->>L: 任务完成和需求变化
+    L->>ERS: 更新期望 Runner 副本数
+    C->>K: 删除已结束的临时 Runner 相关对象
+    Note over C,Pod: 成员集群不需要常驻 ARC Controller，清理按 ARC 和 Karmada 的对象生命周期完成
+    Note over C,K: 已验证本轮对象回收，历史 ERS Finalizer 残留不属于已清理范围
+```
 
 **外部体验：** 平台按任务需求创建临时 Runner。任务结束后按 ARC 生命周期回收。
 
@@ -226,7 +279,39 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.3 US-03：原生跨成员调度
 
-![US-03 原生跨成员调度运行时序图](images/story-us-03-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(255,240,222) Runner 资源入口
+        participant C as ARC Controller
+        participant API as Karmada API
+    end
+    box rgb(232,243,255) Karmada 联邦编排
+        participant P as PropagationPolicy
+        participant D as Detector
+        participant S as Karmada Scheduler
+        participant B as Binding / Work
+    end
+    box rgb(231,249,239) 成员执行
+        participant M1 as member1
+        participant M2 as member2
+    end
+
+    C->>API: 创建 Runner Pod
+    API->>P: 根据选择器匹配 arc-runner-pod-propagation
+    Note over P,S: clusterAffinity 允许 member1 和 member2，Divided / Weighted 按各 Pod 分别决策
+    D->>API: 观察待传播的 Runner Pod
+    D->>B: 创建 ResourceBinding
+    S->>B: 写入选定的成员集群 Placement
+    B->>M1: 通过 Work 下发到 member1（被选中时）
+    opt 另一个独立 Pod 被调度至 member2
+        B->>M2: 通过 Work 下发到 member2（被选中时）
+    end
+    M1->>M1: 原生 kube-scheduler 选择节点并执行
+    M2->>M2: 如收到 Pod 则在本集群执行
+    Note over S,M2: 不保证多个独立 Pod 每轮均匀分布，实测既有 2比1 也有 3比0
+    Note over C,API: Karmada 选择成员集群，成员 kube-scheduler 负责节点级调度
+```
 
 **外部体验：** 同一 Scale Set 的 Job 可在 member1 或 member2 运行。
 
@@ -236,7 +321,39 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.4 US-04：JIT Secret 跟随 Runner
 
-![US-04 JIT Secret 跟随 Runner运行时序图](images/story-us-04-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(255,240,222) ARC 对象创建
+        participant C as ARC Controller
+        participant API as Karmada API
+    end
+    box rgb(232,243,255) Karmada 依赖传播
+        participant P as PropagationPolicy
+        participant B as Binding / Work
+    end
+    box rgb(231,249,239) 目标成员集群
+        participant Secret as JIT Secret
+        participant Pod as Runner Pod
+    end
+
+    C->>API: 创建瞬时 JIT Secret
+    C->>API: 创建引用 Secret 的 Runner Pod
+    P->>API: 匹配 Runner Pod 并启用 propagateDeps
+    API->>B: 为 Pod 选择目标成员并跟踪依赖
+    B->>Secret: 向相同成员传播 JIT Secret
+    B->>Pod: 向相同成员传播 Runner Pod
+    alt Secret 尚未到达
+        Pod->>Secret: 尝试读取引用的凭证
+        Secret-->>Pod: 暂时不可用（可出现 FailedMount）
+        Note over Secret,Pod: 异步依赖传播，不是原子事务
+    else Secret 已准备好
+        Pod->>Secret: 读取 JIT 凭证
+        Secret-->>Pod: 返回注册凭证
+    end
+    Pod->>Pod: Runner 启动并向 GitHub 注册
+    Note over API,Pod: 凭证与 Pod 共置于选定成员，任务结束后的回收见 US-07
+```
 
 **外部体验：** Runner 启动后正常注册并领取 Job，无需开发者管理一次性凭证。
 
@@ -246,7 +363,39 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.5 US-05：Listener 跨控制面认证
 
-![US-05 Listener 跨控制面认证运行时序图](images/story-us-05-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(231,249,239) member1 成员集群
+        participant L as ARC Listener Pod
+    end
+    box rgb(255,240,222) 网络与凭证配置
+        participant T as listenerTemplate
+        participant N as hostAliases / ENV
+        participant SA as karmada-token / CA
+    end
+    box rgb(232,243,255) 联邦控制面
+        participant API as Karmada API Server
+        participant ERS as EphemeralRunnerSet
+    end
+
+    T->>L: 注入 Listener Pod 模板及挂载配置
+    N->>L: 设置 KUBERNETES_SERVICE_HOST / PORT
+    N->>L: hostAliases 映射控制面域名
+    SA->>L: 挂载 Karmada ServiceAccount Token 和 CA
+    L->>API: HTTPS 请求 Karmada API
+    API->>API: 校验 TLS 证书 SAN
+    API->>API: 认证 Token 并按 RBAC 授权
+    alt 证书与权限均有效
+        API-->>L: 建立可用的 API 访问
+        L->>ERS: Watch / Patch 期望 Runner 副本数
+        ERS-->>L: 返回对象状态
+    else TLS 或 RBAC 不匹配
+        API-->>L: x509 / Unauthorized / Forbidden
+        Note over L,SA: 需修正域名、凭证或最小权限授权
+    end
+    Note over L,ERS: 官方 ARC 0.15.0 + 配置适配；已验证 Listener UID 和配置 Secret RV 稳定
+```
 
 **外部体验：** Listener 持续响应任务需求；用户不感知控制面与成员集群的网络差异。
 
@@ -256,7 +405,34 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.6 US-06：Pod 状态正确回传
 
-![US-06 Pod 状态正确回传运行时序图](images/story-us-06-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(231,249,239) 成员集群运行状态
+        participant Pod as Runner Pod
+        participant Kubelet as kubelet
+    end
+    box rgb(255,240,222) Karmada 状态聚合
+        participant EC as Execution Controller
+        participant RI as Lua ResourceInterpreter
+        participant CP as 控制面 Pod
+    end
+    box rgb(232,243,255) ARC 控制面判定
+        participant ARC as ARC Controller
+    end
+
+    Pod->>Kubelet: 容器启动并进入 Running / Ready
+    Kubelet->>EC: 上报成员 Pod.status
+    Note over Kubelet,EC: 状态包含 containerStatuses 的容器名称、state 和 conditions
+    EC->>RI: 聚合成员状态（statusItems）
+    RI->>RI: 执行 AggregateStatus
+    RI->>CP: 写回完整的 desiredObj.status
+    CP-->>ARC: 暴露容器名称和 Pod Ready Condition
+    ARC->>CP: 读取聚合后的 Pod 状态
+    CP-->>ARC: 返回完整的 Runner 状态
+    ARC->>ARC: 正确识别就绪，避免缺字段导致超时误删
+    Note over RI,ARC: 通过 ResourceInterpreterCustomization 声明 Lua 规则，无需修改 Karmada 源码
+```
 
 **外部体验：** Runner Ready 状态正常，ARC 不会因状态字段缺失而误删 Runner。
 
@@ -266,7 +442,37 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.7 US-07：本轮资源自动清理
 
-![US-07 本轮资源自动清理运行时序图](images/story-us-07-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(232,243,255) 任务完成事件
+        participant Pod as Runner Pod
+        participant GH as GitHub Actions
+        participant ARC as ARC Controller
+    end
+    box rgb(255,240,222) 联邦清理链路
+        participant API as Karmada 控制面
+        participant BW as ResourceBinding / Work
+    end
+    box rgb(231,249,239) 成员与验证
+        participant Member as 成员资源
+        participant Verify as 验证脚本
+    end
+
+    Pod-->>GH: 上报 Job 执行结果与状态
+    GH-->>ARC: 任务完成状态进入 ARC 生命周期
+    ARC->>API: 清理本轮 EphemeralRunner / Runner Pod
+    API->>BW: 调谐关联 Binding 与 Work 删除
+    BW->>Member: 删除成员 Runner Pod 等传播对象
+    ARC->>API: 清理关联一次性 JIT Secret
+    API->>Member: 传播凭证对象删除
+    Verify->>API: 按 UID 盘点本轮 ER / Pod / Secret / Binding / Work
+    Verify->>Member: 盘点成员中的本轮 Pod 和 Secret
+    Member-->>Verify: 返回残留对象清单
+    API-->>Verify: 返回控制面残留对象清单
+    Note over Verify: 本轮资源无残留；历史 ERS Finalizer 未自动清理
+    Note over ARC,Member: 删除按各控制器异步调谐完成，不代表所有历史对象零残留
+```
 
 **外部体验：** Job 完成后不遗留本轮创建的临时 Runner 和 JIT Secret。
 
@@ -276,7 +482,35 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.8 US-08：NPU 资源执行（待验证）
 
-![US-08 NPU 资源执行（待验证）运行时序图](images/story-us-08-runtime-sequence.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(232,243,255) 任务与 Runner 模板
+        participant GH as GitHub Actions
+        participant ARC as ARC Controller
+    end
+    box rgb(255,240,222) 联邦和成员调度
+        participant K as Karmada Scheduler
+        participant KS as 成员 kube-scheduler
+    end
+    box rgb(231,249,239) NPU 执行环境
+        participant DP as NPU Device Plugin
+        participant Pod as NPU Runner Pod
+    end
+
+    Note over GH,Pod: 设计路径 / 尚未经过本仓库真实 NPU 工作负载验证
+    GH->>ARC: 提交 NPU Runner 标签对应的 Job 需求
+    ARC->>K: 创建声明 NPU 资源请求的 Runner Pod
+    Note over ARC,K: 需要先明确 Runner Pod 的 NPU 资源规格及集群兼容条件
+    K->>KS: 将 Runner Pod 分发到候选成员集群
+    KS->>KS: 依据资源请求、节点标签和可用节点进行调度
+    KS->>DP: 使用节点上的设备资源分配能力
+    DP-->>Pod: 提供已分配的 NPU 设备资源
+    KS->>Pod: 在选定节点启动 Pod
+    Pod->>Pod: 执行 NPU 计算或测试
+    Pod-->>GH: 上报 Job 结果，退出后释放资源
+    Note over K,Pod: 缺少真实 NPU 节点、Device Plugin 和资源分配的端到端实测
+```
 
 **外部行为（待验证）：** 工作流选择 NPU Runner 规格后，由兼容 NPU 节点执行计算任务。
 
