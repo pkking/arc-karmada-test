@@ -1,8 +1,8 @@
 name: Test Unified ARC Karmada Multi-Cluster
+# Real self-hosted Runner E2E must be explicitly dispatched.
+# Documentation/static-contract pushes must not enqueue three CI Jobs.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 jobs:
   job-1:
