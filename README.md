@@ -6,7 +6,7 @@
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
 
-系统边界、Before / After 对比、ARC / Karmada / Kubernetes 分层架构、用户故事及实测证据见[《ARC + Karmada 联邦调度执行子系统设计与验证说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。
+系统边界、Before / After 对比、联邦架构、用户故事及实测证据见[《ARC + Karmada 联邦调度执行子系统设计与验证说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。独立 Agent/开发者在修改 Manifest 或脚本前，还应阅读[实现契约](docs/IMPLEMENTATION-CONTRACT.md)、[验收契约与追踪矩阵](docs/ACCEPTANCE-CONTRACT.md)和[Agent 开发规范](AGENTS.md)。这些文件约束当前 PoC 行为，**不代表全新 Kind 环境重建或生产能力已通过验证**。
 
 ---
 
@@ -369,18 +369,31 @@ Listener Ready 且已成功建立 GitHub session 后，监听池就绪。`minRun
 
 ## 六、 运行验证与效果分析
 
-### 自动化回归（推荐）
+### 自动化回归：功能与单轮成员覆盖分开验收
 
-先确保 Listener Ready、成员集群上下文 `kind-member1` / `kind-member2` 可访问且 `gh` 已认证。以下命令会注入并恢复测试 annotation、反复触发真实 Listener 调谐，自动派发一个 GitHub workflow，并检查三任务成功、两成员集群实际执行、JIT Secret 同集群可用、状态回传、Pod/临时 Secret/ER 回收，以及稳定窗口内 Listener UID/Secret ResourceVersion 不变：
+先确保 Listener Ready、成员集群上下文 `kind-member1` / `kind-member2` 可访问，且 `gh` 已认证。本仓库将验收拆为 [T0 静态 / T1 功能 / T2 定向成员 / T3 统计均衡](docs/ACCEPTANCE-CONTRACT.md)，避免将 **Job 成功** 与 **同一轮任务覆盖两个成员** 混为一谈。
 
 ```bash
-python3 scripts/verify-arc.py --dispatch --duration 180 \
-  --output /tmp/arc-015-validation/runtime.json
+# T0：离线守护测试
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+bash -n scripts/*.sh
+
+# T1：三个 GitHub Job 功能成功、JIT/状态和本轮清理；
+# 保存 clusterCoveragePassed，但不因为单轮 3:0 分布而认定功能失败
+python3 scripts/verify-arc.py --dispatch --coverage-mode report-only --duration 180 \
+  --output /tmp/arc-015-validation/t1-functional.json
+
+# 兼容原来的单轮两个成员均需观测到 Runner 的综合回归；
+# 默认即 require，显式写出便于审计
+python3 scripts/verify-arc.py --dispatch --coverage-mode require --duration 180 \
+  --output /tmp/arc-015-validation/coverage-experiment.json
 ```
 
-仅检查 Listener 稳定性可去掉 `--dispatch`。可用 `--repo`、`--kubeconfig`、`--contexts` 指定环境。默认要求全部成员都有 Runner 执行证据；若某轮全部落到一个成员，会因跨成员覆盖不足而失败，即使 GitHub 任务成功。定向测试可在**明确临时修改 placement 并在结束后恢复**的前提下，用 `--required-contexts kind-member2` 只验该成员执行能力，不能把它当作自动均匀分摊通过。
+采样器会短暂修改并恢复 Listener config Secret 和 ARC 自动生成的 Role 的测试 annotation，随后检查 Listener UID、Secret ResourceVersion、Runner/JIT、控制面 Pod 状态和本轮清理。JSON 不包含 Secret Data/Token，但仍须核对脱敏。**如果 GitHub Job 成功而单轮全部落在 member1，T1 可以通过，require 模式的成员覆盖实验应失败**，两项结果都保留。
 
-JSON 不包含 Secret Data 或 Token；本脚本按专用 PoC 命名空间设计，不要在有无关并发任务的共享池上直接跑清理断言。观察窗口结束未满足条件会退出非零，不应通过延迟超时或放宽断言掩盖故障。离线护栏测试可运行 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`。
+T2 不依赖随机调度：经审阅后暂时将 Runner Policy 的 placement **分别定向** member1/member2，每次用 `--required-contexts kind-member1` 或 `kind-member2`、`--coverage-mode require` 验证该成员。测试完成后必须恢复 `clusterNames: [member1, member2]` 并保留恢复后的证据。T3 资源均衡及排队性能须另设统计实验，不由该脚本证明。
+
+可用 `--repo`、`--kubeconfig`、`--contexts`、`--duration` 调整环境；`180` 秒为采样窗口而非生产 SLA。不要在有无关并发任务的共享池上直接运行清理断言。GitHub dispatch 超时后先发现已有 run，不可盲目再次派发。原型部署后另需真实验证，**未运行不能标记为已通过**。
 
 ### 1. 手动触发并发 Workflow
 在测试仓库中触发 [`.github/workflows/test-arc.yml`](.github/workflows/test-arc.yml)（包含 3 个并发 Job，指定 `runs-on: karmada-runner`）：
