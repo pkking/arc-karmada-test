@@ -6,7 +6,7 @@
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
 
-系统定位、Before / After 架构对比、用户故事、组件职责及与 `arc-fedsched` 的实现映射见[《Karmada + ARC 联邦调度子系统设计说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。
+系统边界、Before / After 对比、ARC / Karmada / Kubernetes 分层架构、用户故事及实测证据见[《ARC + Karmada 联邦调度执行子系统设计与验证说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。
 
 ---
 
