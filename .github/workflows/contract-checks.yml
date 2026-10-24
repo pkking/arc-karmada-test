@@ -1,0 +1,25 @@
+name: ARC Karmada Contract Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract-checks:
+    name: Static PoC contract and verifier guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check Python syntax
+        run: python3 -m compileall -q scripts tests
+      - name: Run offline unit tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
