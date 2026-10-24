@@ -46,31 +46,19 @@
 
 ## 1.4 整体架构
 
-### 1.4.1 系统边界图
+![ARC + Karmada 联邦调度执行子系统整体架构](images/overall-subsystem-architecture.svg)
 
-![ARC + Karmada 联邦执行子系统边界](images/federation-subsystem-boundary.svg)
+本子系统包含 ARC、Karmada、成员 Kubernetes 集群及 Runner 执行环境。图中灰色外框表示子系统边界。边界外的系统通过以下接口交互。
 
-### 1.4.2 分层逻辑架构图
-
-![ARC + Karmada 分层逻辑架构](images/federation-layered-architecture.svg)
-
-### 1.4.3 控制流与数据流图
-
-![ARC + Karmada 控制流与数据流](images/federation-control-data-flow.svg)
-
-### 1.4.4 部署与组件范围
-
-| 环境 / 组件 | 角色 | 验证状态 |
+| 外部子系统 | 方向 | 交互内容 |
 |---|---|---|
-| 宿主侧 ARC Controller | 连接 Karmada API；管理 Scale Set、RunnerSet 与 Runner | 已验证，PoC 使用官方镜像 |
-| Karmada 控制面 | API Server、Controller Manager、Scheduler、ResourceBinding / Work | 已验证基础分发 |
-| member1 | Listener 与 Runner 执行成员 | 已验证 |
-| member2 | Runner 执行成员 | 已验证，包括定向执行 |
-| 两成员 Kubernetes | API、调度器、kubelet、容器运行时 | 已通过 Runner Pod 执行间接验证 |
-| NPU 节点 / Device Plugin | 目标执行资源 | **未进行本轮 NPU 工作负载验证** |
-| `karmada-search` | Karmada 官方跨集群资源查询、缓存和 proxy 可选组件 | **非本原型已验证的调度主路径** |
+| GitHub Actions | 输入 | 工作流任务、`runs-on` 标签、Runner 需求 |
+| GitHub Actions | 输出 | Runner 注册、Job 执行状态和结果 |
+| 配置与部署系统 | 输入 | Scale Set、PropagationPolicy、RBAC、组件版本 |
+| 镜像仓库 | 输入 | Runner 镜像、Action 镜像 |
+| 监控与审计系统 | 输出 | 运行日志、Kubernetes 事件、验证记录 |
 
-Karmada 官方提供 [karmada-search](https://karmada.io/docs/userguide/globalview/global-search-for-resources/) 作为独立搜索能力。原型未为它配置 ResourceRegistry，也未将其作为 Runner 分发的必要条件。原生调度链路以 Karmada Scheduler、Binding 和 Execution 控制器为主。
+**原型范围：** 当前验证使用 ARC 0.15.0、Karmada v1.19.0 和两个 KinD 成员集群。图中只展示该集成链路中的组件。NPU 设备插件、真实 NPU 作业和 `karmada-search` 未纳入本次验证。
 
 ## 1.5 关键约束
 
