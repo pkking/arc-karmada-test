@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1290" viewBox="0 0 2200 1290" role="img" aria-label="ARC Karmada 联邦调度执行子系统整体架构及外部接口">
+<defs><marker id="arrow" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto"><path d="M0 0 L11 5.5 L0 11Z" fill="#6d7780"/></marker></defs>
+<rect width="2200" height="1290" fill="#fff"/>
+<text x="1100" y="65" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="40" font-weight="750" text-anchor="middle" fill="#20252b">ARC + Karmada 联邦调度执行子系统整体架构</text>
+<text x="1100" y="108" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="22" font-weight="420" text-anchor="middle" fill="#606b76">系统边界、内部模块、外部输入与输出</text>
+<rect x="334" y="207" width="1506" height="891" rx="9" fill="#ffffff" stroke="#8f979f" stroke-width="3"/>
+<text x="362" y="253" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="29" font-weight="700" text-anchor="start" fill="#20252b">联邦调度执行子系统（原型验证范围）</text>
+<rect x="33" y="435" width="252" height="150" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="159" y="475" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="26" font-weight="650" text-anchor="middle" fill="#20252b">GitHub Actions</text>
+<text x="159" y="503" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">CI 工作流 / 任务队列</text>
+<rect x="1903" y="174" width="269" height="113" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="2037.5" y="214" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="650" text-anchor="middle" fill="#20252b">配置与部署系统</text>
+<text x="2037.5" y="242" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">Scale Set / Policy / RBAC</text>
+<rect x="1903" y="730" width="269" height="122" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="2037.5" y="770" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="650" text-anchor="middle" fill="#20252b">监控与审计系统</text>
+<text x="2037.5" y="798" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">日志 / 事件 / 运行证据</text>
+<rect x="948" y="1157" width="328" height="104" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1112" y="1197" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="25" font-weight="650" text-anchor="middle" fill="#20252b">镜像仓库</text>
+<text x="1112" y="1225" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">Runner 镜像 / Action 镜像</text>
+<polyline points="285,478 313,478 313,480 384,480" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="43" y="401" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="17" font-weight="450" text-anchor="start" fill="#20252b">输入：工作流任务、runs-on、Runner 需求</text>
+<polyline points="384,526 313,526 313,541 285,541" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="41" y="620" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="17" font-weight="450" text-anchor="start" fill="#20252b">输出：Runner 注册、Job 状态和结果</text>
+<polyline points="1903,230 1803,230 1803,292 1182,292 1182,331" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="1545" y="211" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="17" font-weight="450" text-anchor="start" fill="#20252b">输入：Scale Set、PropagationPolicy、RBAC、版本</text>
+<polyline points="1748,651 1870,651 1870,788 1903,788" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="1849" y="701" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="17" font-weight="450" text-anchor="middle" fill="#20252b">输出：运行日志、事件、验证记录</text>
+<polyline points="1112,1157 1112,1120 907,1120 907,1061" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<polyline points="1112,1120 1504,1120 1504,1061" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="1250" y="1138" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="17" font-weight="450" text-anchor="middle" fill="#20252b">输入：Runner 镜像、Action 镜像</text>
+<rect x="362" y="273" width="1449" height="241" rx="9" fill="#ffffff" stroke="#c4cbd2" stroke-width="1.5" stroke-dasharray="8 5"/>
+<text x="378" y="308" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="700" text-anchor="start" fill="#20252b">任务接入与 Runner 管理</text>
+<rect x="392" y="353" width="237" height="120" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="510.5" y="393" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="650" text-anchor="middle" fill="#20252b">ARC Listener</text>
+<text x="510.5" y="421" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">GitHub 任务匹配</text>
+<rect x="675" y="353" width="237" height="120" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="793.5" y="393" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="650" text-anchor="middle" fill="#20252b">ARC Controller</text>
+<text x="793.5" y="421" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">Runner 生命周期管理</text>
+<rect x="959" y="353" width="277" height="120" rx="5" fill="#ffead5" stroke="#ef8d36" stroke-width="1.7"/>
+<text x="1097.5" y="393" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="21" font-weight="650" text-anchor="middle" fill="#20252b">AutoscalingRunnerSet</text>
+<text x="1097.5" y="421" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">EphemeralRunnerSet</text>
+<rect x="1282" y="353" width="234" height="120" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1399" y="393" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="21" font-weight="650" text-anchor="middle" fill="#20252b">EphemeralRunner</text>
+<text x="1399" y="421" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">临时 Runner 实例</text>
+<rect x="1562" y="353" width="213" height="120" rx="5" fill="#fde5ed" stroke="#f47ca1" stroke-width="1.7"/>
+<text x="1668.5" y="393" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="22" font-weight="650" text-anchor="middle" fill="#20252b">JIT Secret</text>
+<text x="1668.5" y="421" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">Runner 注册凭证</text>
+<line x1="629" y1="413" x2="675" y2="413" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="912" y1="413" x2="959" y2="413" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1236" y1="413" x2="1282" y2="413" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1516" y1="413" x2="1562" y2="413" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<rect x="362" y="534" width="1449" height="295" rx="9" fill="#ffffff" stroke="#c4cbd2" stroke-width="1.5" stroke-dasharray="8 5"/>
+<text x="378" y="569" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="700" text-anchor="start" fill="#20252b">原生联邦编排与状态聚合</text>
+<rect x="385" y="610" width="190" height="95" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="480" y="666.5" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="650" text-anchor="middle" fill="#20252b">PropagationPolicy</text>
+<rect x="618" y="610" width="196" height="95" rx="5" fill="#ffead5" stroke="#ef8d36" stroke-width="1.7"/>
+<text x="716" y="666.5" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="650" text-anchor="middle" fill="#20252b">Karmada API</text>
+<rect x="853" y="610" width="189" height="95" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="947.5" y="666.5" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="650" text-anchor="middle" fill="#20252b">Detector</text>
+<rect x="1081" y="610" width="210" height="95" rx="5" fill="#ffead5" stroke="#ef8d36" stroke-width="1.7"/>
+<text x="1186" y="666.5" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="650" text-anchor="middle" fill="#20252b">Scheduler</text>
+<rect x="1330" y="610" width="222" height="95" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1441" y="666.5" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="650" text-anchor="middle" fill="#20252b">ResourceBinding</text>
+<rect x="1591" y="610" width="194" height="95" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1688" y="666.5" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="650" text-anchor="middle" fill="#20252b">Binding</text>
+<line x1="575" y1="657" x2="618" y2="657" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="814" y1="657" x2="853" y2="657" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1042" y1="657" x2="1081" y2="657" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1291" y1="657" x2="1330" y2="657" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1552" y1="657" x2="1591" y2="657" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<rect x="471" y="731" width="244" height="76" rx="5" fill="#fde5ed" stroke="#f47ca1" stroke-width="1.7"/>
+<text x="593" y="778" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="19" font-weight="650" text-anchor="middle" fill="#20252b">Work</text>
+<rect x="763" y="731" width="264" height="76" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="895" y="778" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="19" font-weight="650" text-anchor="middle" fill="#20252b">Execution Controller</text>
+<rect x="1076" y="731" width="256" height="76" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1204" y="778" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="19" font-weight="650" text-anchor="middle" fill="#20252b">Resource Interpreter</text>
+<polyline points="1687,705 1687,719 592,719 592,731" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<line x1="715" y1="769" x2="763" y2="769" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<polyline points="1027,769 1060,769 1060,818 1500,818" fill="none" stroke="#6d7780" stroke-width="2.4" stroke-dasharray="7 5"/>
+<text x="1173" y="818" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="450" text-anchor="middle" fill="#606b76">Pod 状态回传</text>
+<rect x="362" y="849" width="1449" height="220" rx="9" fill="#ffffff" stroke="#c4cbd2" stroke-width="1.5" stroke-dasharray="8 5"/>
+<text x="378" y="884" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="23" font-weight="700" text-anchor="start" fill="#20252b">成员 Kubernetes 执行集群</text>
+<rect x="389" y="895" width="673" height="150" rx="9" fill="#ffffff" stroke="#c4cbd2" stroke-width="1.5" stroke-dasharray="8 5"/>
+<text x="405" y="923" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" fill="#20252b">member1（已验证）</text>
+<rect x="401" y="962" width="158" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="480" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">kube-apiserver</text>
+<rect x="566" y="962" width="157" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="644.5" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">kube-scheduler</text>
+<rect x="730" y="962" width="136" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="798" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">kubelet</text>
+<rect x="873" y="962" width="176" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="961" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">Runner Pod</text>
+<line x1="559" y1="992" x2="566" y2="992" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="723" y1="992" x2="730" y2="992" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="866" y1="992" x2="873" y2="992" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<rect x="1112" y="895" width="673" height="150" rx="9" fill="#ffffff" stroke="#c4cbd2" stroke-width="1.5" stroke-dasharray="8 5"/>
+<text x="1128" y="923" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" fill="#20252b">member2（已验证）</text>
+<rect x="1124" y="962" width="158" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1203" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">kube-apiserver</text>
+<rect x="1289" y="962" width="157" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1367.5" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">kube-scheduler</text>
+<rect x="1453" y="962" width="136" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1521" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">kubelet</text>
+<rect x="1596" y="962" width="176" height="60" rx="5" fill="#ffffff" stroke="#8f979f" stroke-width="1.7"/>
+<text x="1684" y="1001" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="16" font-weight="650" text-anchor="middle" fill="#20252b">Runner Pod</text>
+<line x1="1282" y1="992" x2="1289" y2="992" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1446" y1="992" x2="1453" y2="992" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<line x1="1589" y1="992" x2="1596" y2="992" stroke="#6d7780" stroke-width="2.6" fill="none" marker-end="url(#arrow)"/>
+<polyline points="895,807 895,841 741,841 741,895" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<polyline points="895,841 1450,841 1450,895" fill="none" stroke="#6d7780" stroke-width="2.4" marker-end="url(#arrow)"/>
+<polyline points="1717,895 1717,857 1210,857 1210,807" fill="none" stroke="#6d7780" stroke-width="2.4" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+<text x="375" y="1091" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="17" font-weight="400" text-anchor="start" fill="#606b76">验证边界：官方 ARC 0.15.0、Karmada v1.19.0、两个 KinD 成员集群；真实 NPU 工作负载未验证。</text>
+<rect x="1345" y="1167" width="30" height="25" rx="2" fill="#ffffff" stroke="#8f979f" stroke-width="1.4"/>
+<text x="1386" y="1186" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="18" font-weight="450" text-anchor="start" fill="#20252b">现有标准组件</text>
+<rect x="1605" y="1167" width="30" height="25" rx="2" fill="#ffead5" stroke="#ef8d36" stroke-width="1.4"/>
+<text x="1645" y="1186" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="18" font-weight="450" text-anchor="start" fill="#20252b">原型调整/配置</text>
+<rect x="1865" y="1167" width="30" height="25" rx="2" fill="#fde5ed" stroke="#f47ca1" stroke-width="1.4"/>
+<text x="1905" y="1186" font-family="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, Arial, sans-serif" font-size="18" font-weight="450" text-anchor="start" fill="#20252b">原型新增/适配</text>
+</svg>
