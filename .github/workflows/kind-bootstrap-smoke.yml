@@ -79,9 +79,17 @@ jobs:
           fi
           test -s "$HOME/karmada-data/karmada-apiserver.config"
           for member in member1 member2; do
-            kind get kubeconfig --name "$member" --internal > "$HOME/karmada-data/$member-internal.config"
+            config="$HOME/karmada-data/$member-internal.config"
+            kind get kubeconfig --name "$member" --internal > "$config"
+            ip=$(docker inspect -f '{{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}' "$member-control-plane")
+            test -n "$ip"
+            # The Kind node is reachable from the host and other Kind nodes by
+            # its Docker bridge IP; preserve the hostname used in the API cert.
+            kubectl --kubeconfig="$config" config set-cluster "kind-$member" \
+              --server="https://$ip:6443" --tls-server-name="$member-control-plane"
+            kubectl --kubeconfig="$config" get nodes -o name
             karmadactl --kubeconfig="$HOME/karmada-data/karmada-apiserver.config" \
-              join "$member" --cluster-kubeconfig="$HOME/karmada-data/$member-internal.config"
+              join "$member" --cluster-kubeconfig="$config"
           done
           for member in member1 member2; do
             kubectl --kubeconfig="$HOME/karmada-data/karmada-apiserver.config" \
