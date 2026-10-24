@@ -34,24 +34,15 @@
 
 系统边界表示统一联邦执行的运行范围。各组件可部署在不同 Kubernetes 运行环境。当前 PoC 的 Controller 运行在宿主侧；Listener 下发至 member1，使用独立 Karmada 控制面凭据访问 API。
 
-## 1.3 建设前后对比（Before / After）
+## 1.3 子系统目标
 
-| 维度 | Before：独立集群 | After：ARC + Karmada |
-|---|---|---|
-| Runner 入口 | 项目或 Region 固定绑定 Runner | 工作流按统一 Runner Label 选择 Scale Set |
-| 集群选择 | 项目自行指定执行集群 | Karmada 根据 PropagationPolicy 和集群状态选择成员 |
-| 资源组织 | 各 Region / 项目独立规划 | 相容成员集群纳入联邦执行范围 |
-| 凭证与对象 | 各集群独立维护 | 控制面创建对象；Karmada 传播 Runner 与依赖 |
-| 容量利用 | 热点队列与其他集群空闲可能并存 | 可跨合格成员分发；利用率收益尚待真实数据评估 |
-| 公平性 | 依赖各自队列 | 原生分发不提供全局 Job FIFO 或严格均匀分摊 |
+![独立集群与联邦执行资源池对比](images/federation-subsystem-goal-before-after.svg)
 
-### 1.3.1 Before：项目与执行集群绑定
+**现状：** 各项目使用固定集群。某个集群任务排队时，其他集群可能仍有空闲资源。
 
-每个 Region 分别维护 Runner 和 Kubernetes 执行资源。项目 A 在其专属集群排队时，项目 B 的空闲节点通常无法接收该任务。
+**目标：** ARC 统一管理 Runner 需求。Karmada 将 Runner 分发至满足配置要求的成员集群。成员 Kubernetes 执行任务。系统支持跨成员使用可用执行资源。
 
-### 1.3.2 After：统一 Runner 入口与原生联邦分发
-
-ARC 在控制面管理 Runner 需求。Karmada 将 Runner Pod 和所需 Secret 分发至合格成员。成员 Kubernetes 完成最终 Pod 调度与运行。
+**验证边界：** 原型已验证 Runner 在两个成员集群运行。图中的利用率数值仅用于说明资源不均衡问题。NPU 利用率收益、排队时间改善和跨 Region 生产能力尚未实测。
 
 ## 1.4 整体架构
 
