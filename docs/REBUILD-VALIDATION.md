@@ -1,7 +1,7 @@
 # 全新 Kind 环境重建与验收记录
 
-> Issue #1 的最后一道 P0 完成门槛。**当前状态：未完成真实重建验证。**
-> 2026-10-15 的已验证 PoC 复用了先前存在的 Kind 集群；新增离线 CI 只能验证契约与代码，不能替代重新创建集群并跑真实 GitHub Job。
+> Issue #1 的最后一道 P0 完成门槛。**当前状态：独立 GitHub 托管 Runner 已完成从空环境新建三个 Kind 集群、Karmada v1.19.0 控制面、两成员加入和 ARC CRD 服务端 dry-run；真实 GitHub Runner 的 T1/T2 尚未完成。**
+> 2026-10-15 的原始 PoC 使用先前存在的 Kind 集群；2026-10-24 的 [全新环境基础设施验证 Run #40111697216](https://github.com/pkking/arc-karmada-test/actions/runs/40111697216) 现已在 GitHub 托管 Runner 上成功执行。它验证 R0/R1 与 ARC CRD/Manifest dry-run，**并未**运行真实 ARC Controller、注册 Runner 或派发 GitHub 三 Job。
 
 ## 1. 需要具备的执行环境
 
@@ -63,6 +63,14 @@ python3 scripts/verify-arc.py --dispatch --coverage-mode require \
 # 必须另行核对工作流、对象最终状态与恢复后的控制面。
 ~~~
 
+### 可启动的完整 T1/T2 验证工作流
+
+[`fresh-kind-arc-e2e.yml`](../.github/workflows/fresh-kind-arc-e2e.yml) 只允许 GitHub Actions **workflow_dispatch 手动启动**；它会在全新 Kind 环境中继续部署真实 ARC、Listener，运行 T1 功能与分别定向 member1/member2 的 T2，并在结束时尽量恢复双成员策略及销毁测试集群。它**没有在本次得到端到端成功运行记录**。
+
+启动前必须通过 GitHub Repository → Settings → Secrets and variables → Actions，显式配置**专用于隔离 PoC 的** `ARC_E2E_PAT`，令牌应具有管理该测试仓库自托管 Runner 和触发 Workflow 的权限；不要把 Token 直接输入 workflow_dispatch 文本参数。手工触发后保存该次 Run 链接、脱敏 JSON Artifacts、失败/修复记录。没有此 Secret 时，此工作流应明确失败而不是跳过验收。
+
+**已定位并闭环的 Bootstrap 问题**：首次全新 CI 揭示 `/etc/karmada` 非 root 写入失败；第二次揭示宿主机无法解析 `member1-control-plane`；第三次使用用户级数据目录及可达成员节点 IP + TLS Server Name 验证成功，修改已同步至 [README](../README.md)。
+
 ## 4. 本次请求可确认的执行结果
 
 | 工作 | 当前事实 |
@@ -70,7 +78,8 @@ python3 scripts/verify-arc.py --dispatch --coverage-mode require \
 | 离线契约测试 | 已通过 GitHub Actions 托管 Runner；具体 Run URL 在 [Issue #1](https://github.com/pkking/arc-karmada-test/issues/1) 跟踪 |
 | Secret PodSpec 消费者审计程序 | 已提交及单测；真实成员审计没有执行 |
 | Host / Ready 预检工具 | 已提交及单测；在隔离执行环境运行尚无真实输出 |
-| 新建 Kind + Karmada + ARC | **尚未执行**，不能将 README 初始化命令当作已验证 |
+| 新建 Kind + Karmada | **已通过**：[Run #40111697216](https://github.com/pkking/arc-karmada-test/actions/runs/40111697216) 证实三个新 Kind 集群、Karmada v1.19.0、两成员 Ready 和 Push 模式 |
+| ARC CRD / Manifest server dry-run | **已通过**：与上述全新环境 CI 同一工作流；但不代表 ARC/Listener Ready |
 | 新环境 T1 三 Job | **尚未执行** |
 | 新环境 T2 两成员独立定向 | **尚未执行**；历史证据有 member2 定向，不等于本轮新环境 T2 完成 |
 | D-01/D-02 安全收敛 | 只备好候选配置；尚未使用真实环境执行或批准替换稳定策略 |
