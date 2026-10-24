@@ -204,23 +204,29 @@ karmadactl init --kubeconfig="$HOME/.kube/config" --context=kind-karmada-host \
 安装完成后，Karmada 控制面 kubeconfig 的实际生成位置由 `karmadactl` 版本及 `--karmada-data` 决定。**下续步骤统一使用** `$HOME/karmada-data/karmada-apiserver.config`；运行前须核实该文件存在且可安全访问，不得照搬另一台机器的证书或凭证。
 
 #### 1.3 将成员集群加入 Karmada
+
+**关键网络条件**：`kind get kubeconfig --internal` 默认将 API Server 写成 `https://member1-control-plane:6443`，该 Docker DNS 名在宿主机上可能不可解析。Karmada Push 模式需要其组件所在网络能够访问成员 API；因此应将 kubeconfig 的 server endpoint 显式设为同一 Kind Docker 网络下的**成员节点 IP**，并设置与 API 证书匹配的 `tls-server-name`。该做法适用于本地三个 Kind 集群共享同一 Docker 网络的 PoC。
+
 ```bash
-# 获取 member1 和 member2 的内部 kubeconfig，并加入联邦
-karmadactl --kubeconfig=$HOME/karmada-data/karmada-apiserver.config join member1 \
-  --cluster-kubeconfig=$HOME/karmada-data/member1-internal.config
+umask 077
+mkdir -p "$HOME/karmada-data"
+for member in member1 member2; do
+  config="$HOME/karmada-data/$member-internal.config"
+  kind get kubeconfig --name "$member" --internal > "$config"
+  MEMBER_NODE_IP=$(docker inspect -f '{{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}' "$member-control-plane")
+  test -n "$MEMBER_NODE_IP"
+  kubectl --kubeconfig="$config" config set-cluster "kind-$member" \
+    --server="https://$MEMBER_NODE_IP:6443" --tls-server-name="$member-control-plane"
+  # 宿主机必须能访问此 API，TLS 验证不可关闭
+  kubectl --kubeconfig="$config" get nodes -o name
+  karmadactl --kubeconfig="$HOME/karmada-data/karmada-apiserver.config" join "$member" \
+    --cluster-kubeconfig="$config"
+done
 
-karmadactl --kubeconfig=$HOME/karmada-data/karmada-apiserver.config join member2 \
-  --cluster-kubeconfig=$HOME/karmada-data/member2-internal.config
+kubectl --kubeconfig="$HOME/karmada-data/karmada-apiserver.config" get clusters
+```
 
-# 验证成员集群状态
-kubectl --kubeconfig=$HOME/karmada-data/karmada-apiserver.config get clusters
-```
-预期输出：
-```
-NAME      VERSION   MODE   READY   AGE
-member1   v1.37.0   Push   True    ...
-member2   v1.37.0   Push   True    ...
-```
+预期 `member1`、`member2` 均为 `Ready=True`、`Push`。若跨宿主机或跨 Region，必须按实际网络拓扑提供成员 API endpoint 与证书 SAN，不能沿用 Kind IP 或跳过 TLS 验证。全新环境的这一路径仍由 [干净环境重建 CI](.github/workflows/kind-bootstrap-smoke.yml) 持续验证；各次失败及修正应保留在对应 Actions Run 中。
 
 ---
 
