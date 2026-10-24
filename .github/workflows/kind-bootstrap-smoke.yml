@@ -1,0 +1,113 @@
+name: Fresh Kind Karmada Bootstrap Smoke
+
+on:
+  push:
+    paths:
+      - '.github/workflows/kind-bootstrap-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fresh-kind-bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Kind CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          kind version
+
+      - name: Install Karmada v1.19.0 CLI with release checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/karmada-cli
+          cd /tmp/karmada-cli
+          base=https://github.com/karmada-io/karmada/releases/download/v1.19.0
+          curl --retry 3 -fsSLo karmadactl-linux-amd64.tgz "$base/karmadactl-linux-amd64.tgz"
+          curl --retry 3 -fsSLo karmadactl-linux-amd64.tgz.sha256 "$base/karmadactl-linux-amd64.tgz.sha256"
+          sha256sum -c karmadactl-linux-amd64.tgz.sha256
+          tar -xzf karmadactl-linux-amd64.tgz
+          bin=$(find . -type f -name karmadactl | head -n 1)
+          test -n "$bin"
+          sudo install -m 0755 "$bin" /usr/local/bin/karmadactl
+          karmadactl version || karmadactl --help >/dev/null
+
+      - name: Create three fresh Kind clusters
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"
+          for cluster in karmada-host member1 member2; do
+            kind create cluster --name "$cluster" --image "$image" --wait 180s
+          done
+          kind get clusters
+
+      - name: Initialize exact Karmada control plane versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          karmadactl init --kubeconfig="$HOME/.kube/config" --context=kind-karmada-host \
+            --crds=https://github.com/karmada-io/karmada/releases/download/v1.19.0/crds.tar.gz \
+            --karmada-aggregated-apiserver-image=docker.io/karmada/karmada-aggregated-apiserver:v1.19.0 \
+            --karmada-controller-manager-image=docker.io/karmada/karmada-controller-manager:v1.19.0 \
+            --karmada-scheduler-image=docker.io/karmada/karmada-scheduler:v1.19.0 \
+            --karmada-webhook-image=docker.io/karmada/karmada-webhook:v1.19.0 \
+            --karmada-apiserver-image=registry.k8s.io/kube-apiserver:v1.37.0 \
+            --karmada-kube-controller-manager-image=registry.k8s.io/kube-controller-manager:v1.37.0 \
+            --kube-image-tag=v1.37.0 \
+            --etcd-image=registry.k8s.io/etcd:3.7.0-0
+
+      - name: Join both members using internal Kind contexts
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/karmada-data"
+          if test -f "$HOME/.kube/karmada.config"; then
+            cp "$HOME/.kube/karmada.config" "$HOME/karmada-data/karmada-apiserver.config"
+          fi
+          test -s "$HOME/karmada-data/karmada-apiserver.config"
+          for member in member1 member2; do
+            kind get kubeconfig --name "$member" --internal > "$HOME/karmada-data/$member-internal.config"
+            karmadactl --kubeconfig="$HOME/karmada-data/karmada-apiserver.config" \
+              join "$member" --cluster-kubeconfig="$HOME/karmada-data/$member-internal.config"
+          done
+          for member in member1 member2; do
+            kubectl --kubeconfig="$HOME/karmada-data/karmada-apiserver.config" \
+              wait --for=condition=Ready "clusters.cluster.karmada.io/$member" --timeout=300s
+          done
+
+      - name: Install ARC CRDs and server-dry-run PoC manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          k="$HOME/karmada-data/karmada-apiserver.config"
+          kubectl --kubeconfig="$k" apply --server-side -f crds/
+          kubectl --kubeconfig="$k" apply -f manifests/00-namespaces.yaml
+          kubectl --kubeconfig="$k" apply --dry-run=server -f manifests/01-karmada-interpreter.yaml
+          kubectl --kubeconfig="$k" apply --dry-run=server -f manifests/02-propagation-policies.yaml
+          kubectl --kubeconfig="$k" apply --dry-run=server -f manifests/03-rbac.yaml
+          kubectl --kubeconfig="$k" apply --dry-run=server -f manifests/04-autoscalingrunnerset.yaml
+          kubectl --kubeconfig="$k" get clusters.cluster.karmada.io
+
+      - name: Print explicit validation boundary
+        shell: bash
+        run: |
+          echo 'Fresh Kind/Karmada bootstrap checked. No GitHub registration credential provided.'
+          echo 'ARC Controller/Listener, real GitHub Jobs, T1/T2 and credential narrowing E2E: NOT VERIFIED by this workflow.'
+
+      - name: Destroy disposable Kind clusters
+        if: always()
+        shell: bash
+        run: |
+          for cluster in member1 member2 karmada-host; do
+            kind delete cluster --name "$cluster" || true
+          done
