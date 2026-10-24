@@ -228,7 +228,7 @@ sequenceDiagram
     C->>ERS: Watch 并调谐期望与实际副本
     C->>K: 创建 EphemeralRunner 与 Runner Pod
     Note over Dev,K: 统一 Runner 标签屏蔽 member1 和 member2，后续由 Karmada 选择成员
-    Note over L,GH: 单 Listener 会话是当前原型方案，不代表全平台只有一个 GitHub 连接
+    Note over GH,L: 单 Listener 会话是当前原型方案，不代表全平台只有一个 GitHub 连接
 ```
 
 **外部体验：** 工作流使用 `runs-on: karmada-runner` 提交 Job。业务方无需指定 member1 或 member2。
