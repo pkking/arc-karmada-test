@@ -134,18 +134,19 @@
 
 ![联邦调度执行系统逻辑架构](images/federation-layered-architecture.svg)
 
-| 组件 | 职责 | 主要机制 / 对象 | 实现依据 |
-|---|---|---|---|
-| ARC Controller | Scale Set / Runner 生命周期控制 | AutoscalingRunnerSet、EphemeralRunnerSet、EphemeralRunner、Pod | [官方 ARC](https://github.com/actions/actions-runner-controller)、[Controller 启动脚本](../scripts/run-arc-controller.sh) |
-| ARC Listener | GitHub Job 匹配、Runner 需求更新 | 长轮询、EphemeralRunnerSet Patch | [RunnerSet 模板](../manifests/04-autoscalingrunnerset.yaml) |
-| Listener 控制面身份 | 使成员内 Listener 访问 Karmada API | hostAliases、CA / Token、最小 Role / RoleBinding | [RunnerSet](../manifests/04-autoscalingrunnerset.yaml)、[RBAC](../manifests/03-rbac.yaml)、[Token 初始化](../scripts/setup-karmada-token.sh) |
-| Karmada（上游复用子系统） | 按传播策略选择合格成员、下发资源，并向控制面同步状态；本系统不负责其内部调度与控制器实现 | 输入：Pod / Secret / ServiceAccount、PropagationPolicy；输出：ResourceBinding / Work、控制面 Pod.status | [传播策略](../manifests/02-propagation-policies.yaml)、[验证记录](arc-0.15.0-validation.md) |
-| 联邦传播策略配置（本原型） | 声明 Runner Pod 和依赖资源的传播范围、候选成员及分发策略 | `clusterAffinity`、`Divided / Weighted`、`propagateDeps: true` | [传播策略](../manifests/02-propagation-policies.yaml) |
-| Pod 状态聚合适配配置（本原型） | 通过 Karmada 扩展接口保留 ARC 判定就绪所需的完整 Pod 状态 | `ResourceInterpreterCustomization`、`AggregateStatus`、`containerStatuses` / `conditions` | [解释器](../manifests/01-karmada-interpreter.yaml) |
-| 成员 Kubernetes | 调度、创建并运行 Runner Pod | kube-apiserver、kube-scheduler、kubelet、container runtime | [运行证据](arc-0.15.0-validation.md) |
-| NPU 节点与设备插件 | 提供未来 NPU 工作负载执行环境 | K8s 扩展资源 / Device Plugin | 目标架构；本轮未验证 |
-| karmada-search（可选） | 跨集群查询、缓存与 proxy | ResourceRegistry、Search API | [Karmada 官方说明](https://karmada.io/docs/userguide/globalview/global-search-for-resources/)；不在本轮主链路 |
-| 验证工具 | 采集运行证据与检查清理 | verify-arc.py、unittest、evidence JSON | [验证脚本](../scripts/verify-arc.py)、[证据目录](evidence/) |
+本子系统要解决的核心问题是：**项目与执行集群绑定，导致集群间资源难以互用、负载不均衡及任务排队**。架构采用 **ARC 集中管理 Runner + Karmada 联邦分发 + 成员 Kubernetes 原生执行** 的协作模式；以下重点说明各构件对整体问题的贡献，而非展开上游组件的内部实现。
+
+| 架构构件 | 主要解决的问题 / 架构职责 | 与其他构件的协作关系 |
+|---|---|---|
+| ARC Listener | **统一任务入口**：让开发者使用同一个 Runner 标签提交任务，不必为不同成员集群选择专用标签。 | 对接 GitHub Actions 的任务需求，与 ARC Controller 协同完成按需 Runner 供给。 |
+| ARC Controller | **集中管理执行实例的生命周期**：使 Runner 的创建、扩缩与回收不再由每个执行集群各自管理。 | 承接 Listener 的需求变化，将 Runner 交给 Karmada 跨集群分发，并根据执行状态管理生命周期。 |
+| Karmada（复用的联邦子系统） | **打通相互隔离的执行资源池**：将多个成员集群纳入同一分发范围，使一个项目的任务可以使用其他合格成员的执行资源。 | 接收 ARC 产生的 Runner 对象，将其分发至成员 Kubernetes，并把执行状态返回给 ARC；不取代成员的节点级调度。 |
+| 成员 Kubernetes 与 Runner Pod | **提供实际、相互隔离的任务执行能力**：让集中管理的 Runner 在选中的成员集群使用当地计算资源执行 GitHub Job。 | 接收 Karmada 下发的 Runner 工作负载，使用成员原生调度与网络执行任务，并向控制面反馈状态。 |
+| ARC–Karmada 集成适配（本原型配置与扩展） | **消除两套上游系统之间的语义与环境差异**：保障跨控制面访问、临时注册凭证可用、Runner 就绪状态可被正确识别。 | 在 ARC、Karmada 与成员 Kubernetes 之间补齐通信鉴权、依赖传播和状态聚合约束，使上述管理、分发、执行链路闭环。 |
+
+**范围与边界：** GitHub Actions 是边界外的任务来源；验证脚本属于 PoC 验证工具，不是线上调度模块。可选的 `karmada-search` 和尚未实测的 NPU 执行组件不列为本轮逻辑架构构件。跨成员执行已验证，但不据此承诺均匀负载分摊或任务排队时长改善。
+
+部署位置见 **3.2 部署架构**；具体资源对象、联邦契约及配置适配分别见 **3.3 资源对象与生命周期**、**3.4 模块间接口**和[仓库配置](../manifests/)。
 
 ## 3.2 部署架构
 
