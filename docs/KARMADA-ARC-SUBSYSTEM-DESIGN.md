@@ -151,50 +151,7 @@
 
 本节展示 **2026-10-15 已验证的 PoC 部署形态**，侧重组件实际运行位置、控制面连接和成员执行位置；ARC、Karmada 与 Kubernetes 均复用上游实现，不在此展开其内部模块逻辑。
 
-```mermaid
-flowchart TB
-    GH["GitHub Actions（外部服务）"]
-
-    subgraph POC["PoC 本地环境：Docker 与三个 Kind 集群"]
-        direction TB
-        subgraph HOST["宿主侧 Docker Runtime"]
-            ARC["官方 ARC Controller 0.15.0"]
-        end
-
-        subgraph KH["karmada-host：控制面宿主集群"]
-            API["Karmada v1.19.0 控制面 API"]
-            OBJECTS["ARC CRD / RunnerSet / Runner 对象"]
-            POLICY["PropagationPolicy / Lua 状态解释器配置"]
-            OBJECTS -.-> API
-            POLICY -.-> API
-        end
-
-        subgraph M1["member1：Kubernetes v1.37.0"]
-            LISTENER["ARC Listener Pod（arc-systems）"]
-            ADAPT["hostAliases / Karmada Token + CA"]
-            RUNNER1["Runner Pod + JIT Secret（arc-runners）"]
-            ADAPT -.-> LISTENER
-        end
-
-        subgraph M2["member2：Kubernetes v1.37.0"]
-            RUNNER2["Runner Pod + JIT Secret（arc-runners）"]
-        end
-    end
-
-    ARC -->|"使用控制面 kubeconfig 调谐"| API
-    LISTENER -->|"经 TLS 与 RBAC 访问控制面 API"| API
-    API -->|"定向传播 Listener 及其依赖"| LISTENER
-    API -->|"Runner Pod 与 JIT Secret 传播"| RUNNER1
-    API -->|"Runner Pod 与 JIT Secret 传播"| RUNNER2
-    LISTENER <-->|"任务需求 / Scale Set 会话"| GH
-    RUNNER1 <-->|"注册、领取 Job、回传结果"| GH
-    RUNNER2 <-->|"注册、领取 Job、回传结果"| GH
-
-    classDef existing fill:#ffffff,stroke:#9ca3af,color:#1f2937,stroke-width:1.5px
-    classDef adapted fill:#ffedd5,stroke:#9ca3af,color:#1f2937,stroke-width:1.5px
-    class GH,ARC,API,OBJECTS,LISTENER,RUNNER1,RUNNER2 existing
-    class POLICY,ADAPT adapted
-```
+![ARC 与 Karmada 联邦调度执行子系统部署架构](images/arc-karmada-deployment-architecture.svg)
 
 ### 3.2.1 当前部署单元
 
