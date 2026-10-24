@@ -130,47 +130,23 @@ flowchart LR
 
 ## 1.4 整体架构
 
-```mermaid
-flowchart TB
-    GH["GitHub Actions"] --> L["ARC Listener"]
-    L --> C["ARC Controller"]
-    C --> D["Karmada Detector"]
-    D --> RB["ResourceBinding"]
+### 1.4.1 系统边界
 
-    subgraph CP["联邦控制面"]
-        RB -->|"基础模式"| KS["Karmada stock scheduler"]
-        KS -->|"选择成员"| RB
-        RB -->|"schedulerName=arc-dispatcher"| DISP["arc-fedsched Dispatcher"]
-        DISP --> SP["State Provider"]
-        SP --> LED["Ledger 容量账本"]
-        LED --> POL["Policy 策略"]
-        POL --> ENG["Engine 决策执行"]
-        ENG --> HOLD["Holder 条件释放 RB"]
-        HOLD --> RB
-        ENG --> ACT["Actuator 节点预留"]
-        ACT --> PROXY["Karmada Cluster Proxy"]
-        DISP -. "Lease / 放置进展" .-> WD["Watchdog"]
-        WD -. "可选接管" .-> STOCK["Karmada stock scheduler"]
-    end
+![联邦调度子系统边界图](images/federation-subsystem-boundary.svg)
 
-    subgraph MC["成员集群执行面"]
-        RB --> BC["Karmada Binding Controller"]
-        BC --> WORK["Work"]
-        WORK --> RP["Runner Pod"]
-        RP --> HOOK["runner-container-hooks"]
-        HOOK --> WP["工作负载 Pod"]
-        WP --> SCH["Volcano / kube-scheduler + NPU 插件"]
-        SCH --> NODE["NPU 节点"]
-        NODE --> SP
-        WP --> SP
-        PROXY --> NODE
-        JAN["Reservation Janitor"] --> NODE
-        REAP["Orphan Reaper"] --> WP
-    end
-```
+系统边界包括 ARC、Karmada、arc-fedsched、成员集群及其受管 NPU 执行资源。GitHub Actions、开发者和项目位于系统边界外。
 
-Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation；Reaper 清理孤儿工作负载 Pod。State Provider 将成员状态提供给下一轮容量核算。
+### 1.4.2 分层逻辑架构
 
+![联邦调度子系统分层逻辑架构图](images/federation-layered-architecture.svg)
+
+ARC 管理 Runner 生命周期。Karmada 负责跨集群资源传播。arc-fedsched 负责联邦队列、容量核算和调度决策。成员集群执行 Runner 与 NPU 工作负载。
+
+### 1.4.3 控制流与数据流
+
+![联邦调度子系统控制流与数据流图](images/federation-control-data-flow.svg)
+
+ResourceBinding 进入调度队列。Dispatcher 读取成员状态和容量账本，选择目标成员。Holder 条件写入 ResourceBinding。Karmada 创建 Work，成员集群执行任务。节点与 Pod 状态回流至 State Provider。Watchdog、Janitor 和 Reaper 执行独立的恢复与清理职责。
 
 ### 两种运行模式必须区分
 
@@ -417,36 +393,9 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 
 ### 3.1.1 模块间逻辑架构
 
-下图展示模块间的主要控制流和数据流。Dispatcher 协调单轮调度；State Provider 生成状态快照；Ledger 计算容量；Policy 生成决策；Holder 和 Actuator 分别执行 ResourceBinding 与节点预留写操作。
+模块间主要控制和数据依赖见 [控制流与数据流图](#143-控制流与数据流)。
 
-```mermaid
-flowchart TB
-    ARC["ARC Controller / Listener"] --> RB["Karmada ResourceBinding"]
-    RB --> STATE["State Provider"]
-    NODES["Member Nodes / Pods / Runner 状态"] --> STATE
-    STATE --> SNAP["Snapshot"]
-    SNAP --> LEDGER["Ledger"]
-    QUEUE["Runner 队列 / 声明需求"] --> ENGINE["Live Adapter / Engine"]
-    LEDGER --> ENGINE
-    ENGINE --> POLICY["Policy Library"]
-    POLICY --> ENGINE
-    ENGINE --> EST["Estimator Cross-check（可选）"]
-    ENGINE --> HOLDER["ResourceBinding Holder"]
-    ENGINE --> ACT["Node Reservation Actuator"]
-    HOLDER --> RB
-    ACT --> NODES
-    CONFIG["Config / Startup Validation"] --> DISP["Dispatcher Loop / Lease"]
-    DISP --> STATE
-    DISP --> ENGINE
-    TIMEOUT["Timeout Evaluator"] --> ENGINE
-    WD["Watchdog / Break-glass"] -. "故障接管" .-> DISP
-    JAN["Reservation Janitor"] --> NODES
-    REAPER["Orphan Reaper"] --> NODES
-    ENGINE --> OBS["Metrics / Timeline / Trace"]
-    HOLDER --> OBS
-    ACT --> OBS
-    OBS --> REPLAY["Simulator / Differential Validation"]
-```
+![模块间逻辑架构](images/federation-control-data-flow.svg)
 
 ### 3.1.2 各模块内部逻辑架构
 
