@@ -6,7 +6,7 @@
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
 
-系统边界、Before / After 对比、联邦架构、用户故事及实测证据见[《ARC + Karmada 联邦调度执行子系统设计与验证说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。独立 Agent/开发者在修改 Manifest 或脚本前，还应阅读[实现契约](docs/IMPLEMENTATION-CONTRACT.md)、[验收契约与追踪矩阵](docs/ACCEPTANCE-CONTRACT.md)和[Agent 开发规范](AGENTS.md)。这些文件约束当前 PoC 行为，**不代表全新 Kind 环境重建或生产能力已通过验证**。
+系统边界、Before / After 对比、联邦架构、用户故事及实测证据见[《ARC + Karmada 联邦调度执行子系统设计与验证说明》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。独立 Agent/开发者在修改 Manifest 或脚本前，还应阅读[实现契约](docs/IMPLEMENTATION-CONTRACT.md)、[验收契约与追踪矩阵](docs/ACCEPTANCE-CONTRACT.md)和[Agent 开发规范](AGENTS.md)。这些文件约束当前 PoC 行为，**不代表全新 Kind 环境重建或生产能力已通过验证**。 安全变更和重建条件另见[凭证传播审查](docs/SECURITY-REVIEW.md)、[干净环境重建验收清单](docs/REBUILD-VALIDATION.md)。
 
 ---
 
@@ -249,12 +249,20 @@ kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/00-namespaces.ya
 #### 3.2 创建 GitHub 访问凭据 Secret
 在 `arc-runners` 命名空间下创建与 GitHub 交互的 Secret（包含 PAT 或 GitHub App 私钥）：
 ```bash
-# 使用个人访问令牌 (PAT)
-GITHUB_TOKEN="ghp_yourPersonalAccessTokenHere"
+# 交互式输入，不把 PAT 放在 Shell 命令行参数或历史记录中
+read -r -s -p "GitHub PAT: " GITHUB_TOKEN
+printf '\n'
+umask 077
+SECRET_TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$SECRET_TMP_DIR"; unset GITHUB_TOKEN' EXIT
+printf '%s' "$GITHUB_TOKEN" > "$SECRET_TMP_DIR/github_token"
+unset GITHUB_TOKEN
 
 kubectl --kubeconfig="${KUBECONFIG_KARMADA}" -n arc-runners create secret generic arc-github-secret \
-  --from-literal=github_token="${GITHUB_TOKEN}" \
+  --from-file=github_token="$SECRET_TMP_DIR/github_token" \
   --dry-run=client -o yaml | kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f -
+rm -rf "$SECRET_TMP_DIR"
+trap - EXIT
 ```
 
 ---
