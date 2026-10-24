@@ -202,9 +202,7 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 | 可观测性 | verify-arc.py 采集运行、Pod/Secret、UID/RV 和清理证据 | JSON 已脱敏；尚未构建统一 NPU 使用率监控 |
 | 可维护性 | 复用 ARC / Karmada 上游能力，最小化自定义代码 | 自定义内容限于 Lua 聚合器、配置和测试脚本 |
 
-# 4. Story 设计：系统如何完成用户故事
-
-本章与 US-01 至 US-08 一一对应。每个 Story 描述用户看到的行为和系统内部执行步骤。
+# 4. Story 设计
 
 ## 4.1 US-01：按统一标签提交任务
 
@@ -264,9 +262,9 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 
 ## 4.8 US-08：NPU 资源执行（待验证）
 
-**目标体验：** 工作流选择 NPU Runner 规格后，在兼容 NPU 节点执行计算任务。
+**外部行为（待验证）：** 工作流选择 NPU Runner 规格后，由兼容 NPU 节点执行计算任务。
 
-**目标流程：** 声明 NPU 资源请求 → Karmada 选择目标成员 → 成员 kube-scheduler 与 Device Plugin 选择节点及设备 → Pod 执行 → 资源释放。
+**组件协作（尚未验证）：** Runner 模板声明 NPU 请求 → Karmada 选择目标成员 → 成员 kube-scheduler 选择节点 → Device Plugin 分配设备 → Pod 执行 → 资源释放。
 
 **前置工作：** 核对 Runner 模板、NPU 设备插件、资源名称、节点标签、资源分配粒度和网络路径。需要真实 NPU 作业测试。
 
