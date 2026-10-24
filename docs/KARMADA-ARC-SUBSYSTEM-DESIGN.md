@@ -65,7 +65,7 @@
 ## 1.5 关键约束
 
 - Runner 工作流使用 `runs-on: karmada-runner`。标签对应一个已注册 Scale Set。
-- Scale Set 版本标签与 ARC Controller 0.15.0 保持一致。
+- Scale Set 版本标签与选定的官方 ARC Controller 版本保持一致；仓库当前 0.15.0 为配置示例。
 - Listener 运行在成员集群，通过独立 Token、CA 和 DNS 配置访问 Karmada API。
 - Runner Pod 的 JIT Secret 必须传播至同一执行成员；传播过程允许短暂异步等待。
 - Karmada Pod 状态解释器保留 `containerStatuses[].name` 和 `conditions`。
@@ -76,7 +76,7 @@
 
 ## 2.1 用户故事
 
-| ID | 用户故事（作为…我希望…以便…） | 主要验收条件 |
+| ID | 用户故事（作为…我希望…以便…） | 设计成立条件 |
 |---|---|---|
 | US-01 | 作为 CI 开发者，我希望通过稳定的 Runner 标签提交任务，以便不指定执行 Region | 工作流不写成员集群名；Runner 标签匹配成功 |
 | US-02 | 作为平台工程师，我希望集中管理 Runner 生命周期，以便减少每个集群的独立 ARC 部署 | Listener 接收任务，Controller 创建 Runner，执行后清理 |
@@ -124,7 +124,7 @@
 - **异常：** 异步删除、历史 Finalizer 或控制器失败可能保留残余对象。
 - **设计审查：** ARC 回收与 Karmada 下发/删除的所有权和最终一致性边界明确。
 
-### US-08：NPU 成员执行（待验证）
+### US-08：NPU 成员执行（设备选型场景）
 - **目标：** NPU 节点通过 Kubernetes Device Plugin 公开资源；工作负载声明对应扩展资源后，由成员调度器放置。
 - **前置条件：** 确认真实 NPU 类型、分配粒度、驱动、Runtime、设备插件与 Pod 模板。
 - **设计审查：** 依据 Kubernetes Device Plugin 说明资源请求和设备分配；厂商驱动与资源名作为选型输入。
@@ -460,7 +460,7 @@ sequenceDiagram
 
 **设计审查：** 核对 Karmada AggregateStatus 扩展及 ARC 就绪判断所需状态字段，限制为单目标 Runner Pod（KAR-3、ARC-1）。 详见[上游依据矩阵](UPSTREAM-SOURCE-MATRIX.md)。
 
-## 4.7 US-07：本轮资源自动清理
+## 4.7 US-07：临时资源自动清理
 
 ```mermaid
 sequenceDiagram
@@ -476,7 +476,7 @@ sequenceDiagram
     end
     box rgb(231,249,239) 成员与验证
         participant Member as 成员资源
-        participant Verify as 验证脚本
+        participant Verify as 平台资源审计
     end
 
     Pod-->>GH: 上报 Job 执行结果与状态
@@ -494,9 +494,9 @@ sequenceDiagram
     Note over ARC,Member: 删除按各控制器异步调谐完成，不代表所有历史对象零残留
 ```
 
-**外部体验：** Job 完成后不遗留本轮创建的临时 Runner 和 JIT Secret。
+**外部体验：** Job 完成后按 ARC 生命周期回收任务产生的临时 Runner、Pod 与 JIT Secret。
 
-**内部流程：** Job 结束 → ARC 更新 EphemeralRunner 状态并删除临时资源 → Karmada 处理绑定对象和成员资源回收 → 验证脚本按 UID 盘点。
+**内部流程：** Job 结束 → ARC 更新 EphemeralRunner 状态并回收临时资源 → Karmada 调谐关联绑定与成员对象的删除 → 平台审计可按资源 UID 跟踪状态。
 
 **设计审查：** 核对 ARC Runner 回收和 Karmada 工作负载传播对象的所有权及最终一致性（ARC-1、KAR-1）。 详见[上游依据矩阵](UPSTREAM-SOURCE-MATRIX.md)。
 
@@ -532,7 +532,7 @@ sequenceDiagram
     Note over K,Pod: 真实 NPU 资源名、设备插件及兼容性由目标硬件选型决定
 ```
 
-**外部行为（待验证）：** 工作流选择 NPU Runner 规格后，由兼容 NPU 节点执行计算任务。
+**目标外部行为：** 工作流选择 NPU Runner 规格后，由兼容 NPU 节点执行计算任务；厂商设备资源名与驱动属于选型输入。
 
 **组件协作（尚未验证）：** Runner 模板声明 NPU 请求 → Karmada 选择目标成员 → 成员 kube-scheduler 选择节点 → Device Plugin 分配设备 → Pod 执行 → 资源释放。
 
