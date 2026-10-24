@@ -335,11 +335,24 @@ kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/03-rbac.yaml
 1. `githubConfigUrl`: 替换为您的测试仓库地址（如 `https://github.com/pkking/arc-karmada-test`）；
 2. `hostAliases[0].ip`: 替换为您当前环境中 Karmada 控制面的访问 IP（如 Kind 网桥 IP `172.22.0.4` 或宿主机 IP）；
 3. `app.kubernetes.io/version` 必须与 Controller 一致（当前 `0.15.0`）；Runner 镜像固定为 `2.337.0`；
-4. 检查无误后，应用清单：
+4. 在不同 Kind 网络中，请**显式发现实际控制面 IP**，通过只改写允许的配置字段生成环境专属 RunnerSet；不要修改仓库原模板或直接复用旧环境 IP：
 
 ```bash
-kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f manifests/04-autoscalingrunnerset.yaml
+# 发现 Kind Docker 网络中 karmada-host 控制节点的 IPv4 地址
+CONTROL_PLANE_IP=$(docker inspect -f '{{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}' karmada-host-control-plane)
+test -n "$CONTROL_PLANE_IP"
+
+python3 scripts/render-runner-set.py \
+  --control-plane-ip "$CONTROL_PLANE_IP" --api-port 32443 \
+  --github-url "https://github.com/pkking/arc-karmada-test" \
+  --output /tmp/arc-015-autoscalingrunnerset.yaml
+
+# 上述脚本只渲染文件，不创建凭证、不部署；先核对 Karmada API 证书 SAN、
+# CA、Listener -> 控制面的网络连通性和 GitHub 仓库 URL，再应用
+kubectl --kubeconfig="${KUBECONFIG_KARMADA}" apply -f /tmp/arc-015-autoscalingrunnerset.yaml
 ```
+
+若不是 Kind Docker 网络，直接向渲染器传入**实际可达**的 IP / 端口。生成的 RunnerSet 仍固定 Scale Set 名称 `karmada-runner`，变更标签命名需连同 PropagationPolicy 与 RBAC 作独立契约评审。
 
 ---
 
