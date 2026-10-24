@@ -139,10 +139,9 @@
 | ARC Controller | Scale Set / Runner 生命周期控制 | AutoscalingRunnerSet、EphemeralRunnerSet、EphemeralRunner、Pod | [官方 ARC](https://github.com/actions/actions-runner-controller)、[Controller 启动脚本](../scripts/run-arc-controller.sh) |
 | ARC Listener | GitHub Job 匹配、Runner 需求更新 | 长轮询、EphemeralRunnerSet Patch | [RunnerSet 模板](../manifests/04-autoscalingrunnerset.yaml) |
 | Listener 控制面身份 | 使成员内 Listener 访问 Karmada API | hostAliases、CA / Token、最小 Role / RoleBinding | [RunnerSet](../manifests/04-autoscalingrunnerset.yaml)、[RBAC](../manifests/03-rbac.yaml)、[Token 初始化](../scripts/setup-karmada-token.sh) |
-| Karmada API / Controller Manager | 存储并调谐联邦对象 | PropagationPolicy、ResourceBinding、Work | [Karmada 架构](https://karmada.io/zh/docs/v1.16/core-concepts/architecture/) |
-| Karmada Scheduler | 基于 Policy 选择目标成员 | `Divided / Weighted`、clusterAffinity | [传播策略](../manifests/02-propagation-policies.yaml) |
-| Binding / Execution Controllers | 生成并分发 Work | RB placement、Work、成员资源创建 | [Karmada 架构](https://karmada.io/zh/docs/v1.16/core-concepts/architecture/) |
-| Pod Resource Interpreter | 将成员 Pod 完整状态聚合到控制面 | `AggregateStatus` Lua、`status` | [解释器](../manifests/01-karmada-interpreter.yaml) |
+| Karmada（上游复用子系统） | 按传播策略选择合格成员、下发资源，并向控制面同步状态；本系统不负责其内部调度与控制器实现 | 输入：Pod / Secret / ServiceAccount、PropagationPolicy；输出：ResourceBinding / Work、控制面 Pod.status | [传播策略](../manifests/02-propagation-policies.yaml)、[验证记录](arc-0.15.0-validation.md) |
+| 联邦传播策略配置（本原型） | 声明 Runner Pod 和依赖资源的传播范围、候选成员及分发策略 | `clusterAffinity`、`Divided / Weighted`、`propagateDeps: true` | [传播策略](../manifests/02-propagation-policies.yaml) |
+| Pod 状态聚合适配配置（本原型） | 通过 Karmada 扩展接口保留 ARC 判定就绪所需的完整 Pod 状态 | `ResourceInterpreterCustomization`、`AggregateStatus`、`containerStatuses` / `conditions` | [解释器](../manifests/01-karmada-interpreter.yaml) |
 | 成员 Kubernetes | 调度、创建并运行 Runner Pod | kube-apiserver、kube-scheduler、kubelet、container runtime | [运行证据](arc-0.15.0-validation.md) |
 | NPU 节点与设备插件 | 提供未来 NPU 工作负载执行环境 | K8s 扩展资源 / Device Plugin | 目标架构；本轮未验证 |
 | karmada-search（可选） | 跨集群查询、缓存与 proxy | ResourceRegistry、Search API | [Karmada 官方说明](https://karmada.io/docs/userguide/globalview/global-search-for-resources/)；不在本轮主链路 |
@@ -154,13 +153,7 @@
 
 Listener 匹配 Job 并更新 Runner 需求。Controller 管理 RunnerSet、EphemeralRunner、Runner Pod 和 JIT Secret。跨集群对象分发由 Karmada 完成。
 
-### 3.1.2 Karmada 模块逻辑架构
-
-![Karmada 原生联邦编排逻辑架构](images/karmada-component-logic.svg)
-
-Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完成对象放置与传播。Resource Interpreter 负责向控制面聚合成员 Pod 状态。
-
-### 3.1.3 Kubernetes 成员模块逻辑架构
+### 3.1.2 Kubernetes 成员模块逻辑架构
 
 ![Kubernetes 成员执行与 NPU 资源逻辑架构](images/member-kubernetes-component-logic.svg)
 
@@ -186,9 +179,9 @@ Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完�
 | GitHub Actions | ARC Listener | Runner scale-set Job 匹配 | Label 对应已注册 Scale Set |
 | Listener | Karmada API | EphemeralRunnerSet Patch | 控制面 Token、CA、最小权限 |
 | ARC | Karmada | Pod / Secret / ServiceAccount | 对象生命周期与命名空间正确 |
-| PropagationPolicy | Karmada Scheduler | Placement / ClusterAffinity / ReplicaScheduling | 候选成员 Ready |
-| Karmada Binding / Execution | 成员 Kubernetes API | Work / Kubernetes 对象 | 成员可访问且权限有效 |
-| 成员 Pod | Resource Interpreter | 完整 Pod status | Runner 名称、容器状态和 Conditions 必须保留 |
+| 本原型传播策略配置 | Karmada（复用） | `PropagationPolicy`：Pod 选择器、clusterAffinity、Divided / Weighted、propagateDeps | 候选成员可用；不承诺独立 Pod 均匀分布 |
+| Karmada（复用） | 成员 Kubernetes API | Work 中的 Pod / Secret / ServiceAccount 等对象 | 成员可访问且拥有所需权限 |
+| 成员 Kubernetes | Karmada（复用） | Pod.status；由本原型声明的 ResourceInterpreterCustomization 规则聚合 | 控制面需保留容器名称、状态和 Ready conditions |
 | 依赖传播 | 成员 Kubernetes | Runner 所需 JIT Secret | `propagateDeps: true`；允许异步到达 |
 
 ## 3.4 质量属性
