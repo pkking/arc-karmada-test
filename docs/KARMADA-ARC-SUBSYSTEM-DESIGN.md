@@ -169,6 +169,24 @@ Karmada 官方提供 [karmada-search](https://karmada.io/docs/userguide/globalvi
 | karmada-search（可选） | 跨集群查询、缓存与 proxy | ResourceRegistry、Search API | [Karmada 官方说明](https://karmada.io/docs/userguide/globalview/global-search-for-resources/)；不在本轮主链路 |
 | 验证工具 | 采集运行证据与检查清理 | verify-arc.py、unittest、evidence JSON | [验证脚本](../scripts/verify-arc.py)、[证据目录](evidence/) |
 
+### 3.1.1 ARC 模块逻辑架构
+
+![ARC Runner 生命周期逻辑架构](images/arc-component-logic.svg)
+
+Listener 匹配 Job 并更新 Runner 需求。Controller 管理 RunnerSet、EphemeralRunner、Runner Pod 和 JIT Secret。跨集群对象分发由 Karmada 完成。
+
+### 3.1.2 Karmada 模块逻辑架构
+
+![Karmada 原生联邦编排逻辑架构](images/karmada-component-logic.svg)
+
+Karmada Detector、Scheduler、Binding Controller 和 Execution Controller 完成对象放置与传播。Resource Interpreter 负责向控制面聚合成员 Pod 状态。
+
+### 3.1.3 Kubernetes 成员模块逻辑架构
+
+![Kubernetes 成员执行与 NPU 资源逻辑架构](images/member-kubernetes-component-logic.svg)
+
+成员 kube-apiserver、kube-scheduler 和 kubelet 管理实际 Runner Pod。NPU Node / Device Plugin 属于目标资源范围；本轮尚无真实 NPU Job 验证。
+
 ## 3.2 资源对象与生命周期
 
 | 对象 | 生产者 | 消费者 / 作用 |
