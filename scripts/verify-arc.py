@@ -37,7 +37,9 @@ def main():
     parser.add_argument("--duration", type=int, default=180)
     parser.add_argument("--interval", type=int, default=3)
     parser.add_argument("--dispatch", action="store_true", help="Dispatch test-arc.yml and require success, cluster coverage and cleanup")
-    parser.add_argument("--required-contexts", nargs="+", help="Require Runner evidence on these contexts (default: all --contexts); use one for a directed placement test")
+    parser.add_argument("--required-contexts", nargs="+", help="Member contexts to evaluate (default: all --contexts); use one for directed placement tests")
+    parser.add_argument("--coverage-mode", choices=("require", "report-only"), default="require",
+                        help="Require every specified member to have Runner evidence (legacy default), or record coverage without failing T1 functional acceptance")
     parser.add_argument("--repo", default="pkking/arc-karmada-test")
     parser.add_argument("--output", default="/tmp/arc-015-validation/runtime.json")
     args = parser.parse_args()
@@ -50,7 +52,7 @@ def main():
         parser.error("--required-contexts must be included in --contexts")
     cp = ["kubectl", "--request-timeout=15s", "--kubeconfig=" + args.kubeconfig]
     annotation = "validation.arc-karmada-test/metadata-preservation"
-    report = {"startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "requiredContexts": sorted(required_contexts), "samples": [], "runners": {}, "passed": False}
+    report = {"startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "requiredContexts": sorted(required_contexts), "coverageMode": args.coverage_mode, "samples": [], "runners": {}, "passed": False}
     secret_name = None
     original_annotation = None
     reconcile_annotation = "validation.arc-karmada-test/reconcile"
@@ -158,12 +160,16 @@ def main():
             report["clusterCoveragePassed"] = required_contexts.issubset({r["context"] for r in report["runners"].values()})
             report["cleanupPassed"] = run_success and not remaining
             assert run_success, "Workflow did not complete successfully within duration"
-            assert report["clusterCoveragePassed"], "Did not observe Runner Pods on every required member context"
             assert len(report["runners"]) >= 3, "Did not observe three Runner Pods"
             assert all(r["readyWithSecrets"] for r in report["runners"].values()), "Missing ready Runner/JIT Secret evidence"
             assert all(r["namedStatusOnControlPlane"] for r in report["runners"].values()), "Missing named container status on Karmada"
             assert not remaining, "Runner Pods or observed JIT Secrets leaked"
             report["cleanupPassed"] = True
+            report["functionalPassed"] = True
+            # T1 reports but does not require one run to cover both members.
+            # Legacy/default and directed T2 runs explicitly require coverage.
+            if args.coverage_mode == "require":
+                assert report["clusterCoveragePassed"], "Did not observe Runner Pods on every required member context"
         report["passed"] = True
     except Exception as error:
         report["error"] = str(error)
