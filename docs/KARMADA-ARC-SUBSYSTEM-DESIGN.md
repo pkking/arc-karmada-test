@@ -147,19 +147,75 @@
 | karmada-search（可选） | 跨集群查询、缓存与 proxy | ResourceRegistry、Search API | [Karmada 官方说明](https://karmada.io/docs/userguide/globalview/global-search-for-resources/)；不在本轮主链路 |
 | 验证工具 | 采集运行证据与检查清理 | verify-arc.py、unittest、evidence JSON | [验证脚本](../scripts/verify-arc.py)、[证据目录](evidence/) |
 
-### 3.1.1 ARC 模块逻辑架构
+## 3.2 部署架构
 
-![ARC Runner 生命周期逻辑架构](images/arc-component-logic.svg)
+本节展示 **2026-10-15 已验证的 PoC 部署形态**，侧重组件实际运行位置、控制面连接和成员执行位置；ARC、Karmada 与 Kubernetes 均复用上游实现，不在此展开其内部模块逻辑。
 
-Listener 匹配 Job 并更新 Runner 需求。Controller 管理 RunnerSet、EphemeralRunner、Runner Pod 和 JIT Secret。跨集群对象分发由 Karmada 完成。
+```mermaid
+flowchart TB
+    GH["GitHub Actions（外部服务）"]
 
-### 3.1.2 Kubernetes 成员模块逻辑架构
+    subgraph POC["PoC 本地环境：Docker 与三个 Kind 集群"]
+        direction TB
+        subgraph HOST["宿主侧 Docker Runtime"]
+            ARC["官方 ARC Controller 0.15.0"]
+        end
 
-![Kubernetes 成员执行与 NPU 资源逻辑架构](images/member-kubernetes-component-logic.svg)
+        subgraph KH["karmada-host：控制面宿主集群"]
+            API["Karmada v1.19.0 控制面 API"]
+            OBJECTS["ARC CRD / RunnerSet / Runner 对象"]
+            POLICY["PropagationPolicy / Lua 状态解释器配置"]
+            OBJECTS -.-> API
+            POLICY -.-> API
+        end
 
-成员 kube-apiserver、kube-scheduler 和 kubelet 管理实际 Runner Pod。NPU Node / Device Plugin 属于目标资源范围；本轮尚无真实 NPU Job 验证。
+        subgraph M1["member1：Kubernetes v1.37.0"]
+            LISTENER["ARC Listener Pod（arc-systems）"]
+            ADAPT["hostAliases / Karmada Token + CA"]
+            RUNNER1["Runner Pod + JIT Secret（arc-runners）"]
+            ADAPT -.-> LISTENER
+        end
 
-## 3.2 资源对象与生命周期
+        subgraph M2["member2：Kubernetes v1.37.0"]
+            RUNNER2["Runner Pod + JIT Secret（arc-runners）"]
+        end
+    end
+
+    ARC -->|"使用控制面 kubeconfig 调谐"| API
+    LISTENER -->|"经 TLS 与 RBAC 访问控制面 API"| API
+    API -->|"定向传播 Listener 及其依赖"| LISTENER
+    API -->|"Runner Pod 与 JIT Secret 传播"| RUNNER1
+    API -->|"Runner Pod 与 JIT Secret 传播"| RUNNER2
+    LISTENER <-->|"任务需求 / Scale Set 会话"| GH
+    RUNNER1 <-->|"注册、领取 Job、回传结果"| GH
+    RUNNER2 <-->|"注册、领取 Job、回传结果"| GH
+
+    classDef existing fill:#ffffff,stroke:#9ca3af,color:#1f2937,stroke-width:1.5px
+    classDef adapted fill:#ffedd5,stroke:#9ca3af,color:#1f2937,stroke-width:1.5px
+    class GH,ARC,API,OBJECTS,LISTENER,RUNNER1,RUNNER2 existing
+    class POLICY,ADAPT adapted
+```
+
+### 3.2.1 当前部署单元
+
+| 部署位置 | 组件 / 资源 | 部署与职责 | 验证范围 |
+|---|---|---|---|
+| 宿主侧 Docker | ARC Controller `0.15.0` | 官方镜像以 Docker `host` 网络模式运行，使用只读挂载的控制面 kubeconfig 调谐 ARC 资源 | 已运行验证；**不是**部署于成员 Kubernetes 的 Controller Pod |
+| `karmada-host`（Kind） | Karmada 控制面 `v1.19.0` | 承载联邦 API、ARC CRD/CR、传播策略和自定义 Pod 状态解释器；接收 Controller 与 Listener 的 Kubernetes API 请求 | 控制面及两成员联邦已验证 |
+| `member1`（Kind） | ARC Listener Pod（`arc-systems`）、Runner Pod 和 JIT Secret（`arc-runners`） | Listener 由策略定向放置，挂载 Karmada Token/CA 并直连 Karmada API；Runner Pod 根据联邦放置结果执行 Job | Listener 认证、Runner 执行及 JIT 依赖已验证 |
+| `member2`（Kind） | Runner Pod 与 JIT Secret（`arc-runners`） | 作为可选执行成员，由 Karmada 下发 Runner Pod 和依赖凭证；无需单独部署 ARC Controller | 已验证 Runner 定向运行及凭证可用性 |
+| 外部 GitHub Actions | 工作流队列、Runner 注册和 Job 结果 | Listener 获取 Runner 需求；成员 Runner 使用成员自身网络访问 GitHub | 真实 GitHub Actions Job 已验证 |
+
+### 3.2.2 部署约束与验证边界
+
+- **控制面访问**：Controller 使用控制面 kubeconfig；Listener 依靠 `listenerTemplate` 中的 `hostAliases`、`KUBERNETES_SERVICE_HOST/PORT` 和 `karmada-token`（Token/CA）访问 Karmada API。Listener Token 尚未实现自动轮换。
+- **部署与分发边界**：`arc-listener-propagation` 将 Listener 固定放置在 `member1`；`arc-runner-pod-propagation` 允许 Runner Pod 选择 `member1` 或 `member2`，并通过 `propagateDeps: true` 传播 JIT Secret。**同一轮任务不保证两成员均匀分摊**。
+- **资源执行**：成员 Kubernetes 使用本地 kube-scheduler、kubelet 和容器运行时执行 Runner Pod。Runner 不依赖额外跨集群 Pod 网络隧道。本轮没有执行真实 NPU 工作负载。
+- **PoC 限制**：三个 Kind 集群和宿主侧 Docker 构成验证环境；未验证生产级控制面 HA、Controller 最小权限、故障切换、Token 自动轮换及全新环境一键初始化。该部署图不代表已经具备生产就绪能力。
+
+详细配置与实际运行证据分别参见 [复现指南](../README.md)、[RunnerSet 模板](../manifests/04-autoscalingrunnerset.yaml)、[传播策略](../manifests/02-propagation-policies.yaml)及[ARC 0.15.0 验证记录](arc-0.15.0-validation.md)。
+
+## 3.3 资源对象与生命周期
 
 | 对象 | 生产者 | 消费者 / 作用 |
 |---|---|---|
@@ -172,7 +228,7 @@ Listener 匹配 Job 并更新 Runner 需求。Controller 管理 RunnerSet、Ephe
 | Work | Karmada Binding Controller | 向成员集群下发 Kubernetes 对象 |
 | Pod status | 成员 Kubernetes | 经自定义 Resource Interpreter 回传给 ARC |
 
-## 3.3 模块间接口
+## 3.4 模块间接口
 
 | 源 | 目的 | 接口 / 数据 | 关键条件 |
 |---|---|---|---|
@@ -184,7 +240,7 @@ Listener 匹配 Job 并更新 Runner 需求。Controller 管理 RunnerSet、Ephe
 | 成员 Kubernetes | Karmada（复用） | Pod.status；由本原型声明的 ResourceInterpreterCustomization 规则聚合 | 控制面需保留容器名称、状态和 Ready conditions |
 | 依赖传播 | 成员 Kubernetes | Runner 所需 JIT Secret | `propagateDeps: true`；允许异步到达 |
 
-## 3.4 质量属性
+## 3.5 质量属性
 
 | 属性 | 设计措施 | 验证状态 / 风险 |
 |---|---|---|
