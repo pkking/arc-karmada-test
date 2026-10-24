@@ -99,6 +99,26 @@ class ContractStaticTests(unittest.TestCase):
         contract = read("docs/IMPLEMENTATION-CONTRACT.md")
         self.assertIn("无自动轮换", contract)
 
+    def test_real_runner_jobs_are_manual_only(self):
+        workflow = read(".github/workflows/test-arc.yml")
+        self.assertIn("workflow_dispatch:", workflow)
+        # Do not enqueue three self-hosted jobs for every documentation commit.
+        self.assertNotRegex(workflow, r"(?m)^  push:")
+
+    def test_security_candidate_is_not_active_manifest(self):
+        stable = read("manifests/02-propagation-policies.yaml")
+        candidate = read("docs/experiments/propagation-tightening-candidate.yaml")
+        self.assertIn("name: arc-github-secret", stable)
+        self.assertNotIn("name: arc-github-secret", candidate)
+        self.assertIn("labelSelector:", candidate)
+        self.assertNotIn("labelSelector:", policies()["arc-runner-pod-propagation"])
+        self.assertIn("DO NOT APPLY BY DEFAULT", candidate)
+
+    def test_readme_secret_creation_avoids_token_in_command_line(self):
+        readme = read("README.md")
+        self.assertIn("--from-file=github_token=", readme)
+        self.assertNotIn("--from-literal=github_token=", readme)
+
     def test_story_coverage_and_unverified_npu_are_documented(self):
         matrix = read("docs/ACCEPTANCE-CONTRACT.md")
         for i in range(1, 9):
