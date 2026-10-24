@@ -62,5 +62,44 @@ class ArgumentTests(unittest.TestCase):
         self.check_rejected_before_cluster_access(["--required-contexts", "unknown-member"])
 
 
+class CoverageModeTests(unittest.TestCase):
+    def test_legacy_gate_still_rejects_one_member_coverage(self):
+        covered, accepted = verifier.evaluate_cluster_coverage(
+            "require", {"kind-member1", "kind-member2"}, {"kind-member1"}
+        )
+        self.assertFalse(covered)
+        self.assertFalse(accepted)
+
+    def test_t1_accepts_functionally_successful_single_member_coverage(self):
+        covered, accepted = verifier.evaluate_cluster_coverage(
+            "report-only", {"kind-member1", "kind-member2"}, {"kind-member1"}
+        )
+        self.assertFalse(covered)
+        self.assertTrue(accepted)
+
+    def test_t2_directed_requirement_must_still_be_observed(self):
+        self.assertEqual(
+            verifier.evaluate_cluster_coverage(
+                "require", {"kind-member2"}, {"kind-member1"}
+            ),
+            (False, False),
+        )
+        self.assertEqual(
+            verifier.evaluate_cluster_coverage(
+                "require", {"kind-member2"}, {"kind-member2"}
+            ),
+            (True, True),
+        )
+
+    def test_unknown_coverage_mode_is_rejected(self):
+        with self.assertRaises(ValueError):
+            verifier.evaluate_cluster_coverage("silent", set(), set())
+
+    def test_invalid_coverage_flag_rejected_before_cluster_access(self):
+        ArgumentTests().check_rejected_before_cluster_access(
+            ["--coverage-mode", "ignore"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
