@@ -1,0 +1,50 @@
+name: Cancel Stale Self-Hosted Push Runs
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cancel-stale-push-runs.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-stale-push:
+    if: github.repository == 'pkking/arc-karmada-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel only old queued push-triggered three-job runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This workflow was push-triggered by document commits before the
+          # real E2E workflow was made workflow_dispatch-only. Preserve every
+          # manual workflow_dispatch run and any run that has already started.
+          query="repos/$GITHUB_REPOSITORY/actions/runs?per_page=100&status=queued&event=push"
+          mapfile -t stale < <(gh api -X GET "$query" --paginate --jq '
+            .workflow_runs[] |
+            select(.name == "Test Unified ARC Karmada Multi-Cluster") |
+            select(.event == "push") |
+            select(.status == "queued") |
+            select(.created_at < "2026-10-24T16:21:00Z") |
+            .id')
+          echo "Matched queued legacy push runs: ${#stale[@]}"
+          failed=0
+          cancelled=0
+          for id in "${stale[@]}"; do
+            if gh run cancel "$id" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Cancelled legacy queued run $id"
+              cancelled=$((cancelled + 1))
+            else
+              echo "::warning::Unable to cancel legacy queued run $id"
+              failed=$((failed + 1))
+            fi
+            sleep 0.25
+          done
+          echo "Cancelled: $cancelled; unsuccessful: $failed"
+          test "$failed" -eq 0
