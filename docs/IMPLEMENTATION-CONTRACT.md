@@ -1,14 +1,14 @@
-# ARC + Karmada PoC 实现契约
+# ARC + Karmada 集成接口与资源设计契约
 
-> 基线：2026-10-15 已验证的 ARC 0.15.0 / Karmada v1.19.0 / Kubernetes v1.37.0。目标是行为等价的双成员 Kind PoC，**不是生产就绪保证**。对应 [Issue #1](https://github.com/pkking/arc-karmada-test/issues/1)。
+> 用途：从 ARC、Karmada、Kubernetes 的公开 API 资料推导本项目集成方案的资源、接口、身份与异常设计。**不以 PoC、真实 Job 或集群重建为本文档的完成前提**。本仓库的 ARC 0.15.0/Karmada 1.19.0/Kind 配置是实现示例，不是上游官方组合保证。对应 [Issue #1](https://github.com/pkking/arc-karmada-test/issues/1)。
 
 ## 1. 文档分工与规范
 
-[架构设计](KARMADA-ARC-SUBSYSTEM-DESIGN.md)定义目的、职责与 Story；本文件定义**可实现的上游集成契约**；[验收契约](ACCEPTANCE-CONTRACT.md)规定测试断言和证据；[README](../README.md)保存操作命令。不得重新实现 ARC/Karmada 内部 Controller、调度器、OwnerReference 或 Finalizer 机制；代码生成可以不同，但必须满足本契约。配置现状不代表最佳实践；任何安全、传播及调度行为变更必须记录设计差异并证明回归。
+[架构设计](KARMADA-ARC-SUBSYSTEM-DESIGN.md)定义系统目标、职责与 Story；[官方组件依据矩阵](UPSTREAM-SOURCE-MATRIX.md)是本设计的**证据来源**；本文件定义需要本系统承担的**接口、资源、身份和状态约束**；[设计评审准则](ACCEPTANCE-CONTRACT.md)检查其完整性。[README](../README.md) 与[工程测试计划](ENGINEERING-TEST-PLAN.md)是独立实施材料。不得重复设计 ARC/Karmada 的内部控制器、调度器或 Finalizer 机制。凡跨控制面的组合行为，必须标为本系统集成决策，而非上游已经担保的兼容性。
 
 ## 2. 版本与可配置输入
 
-| 参数 | PoC 基线 / 必需行为 |
+| 参数 | 参考实现示例 / 设计约束（部署时参数化） |
 |---|---|
 | ARC | `ghcr.io/actions/gha-runner-scale-set-controller:0.15.0` 官方镜像；四份官方 0.15.0 CRD；RunnerSet `app.kubernetes.io/version: "0.15.0"` |
 | Runner | `ghcr.io/actions/actions-runner:2.337.0`；`minRunners: 0`、`maxRunners: 5` |
@@ -20,7 +20,7 @@
 | 凭证 | 控制面 `arc-runners/arc-github-secret`；`arc-systems/karmada-token`（CA+Token），必须环境外部生成、不入库 |
 | Token | `setup-karmada-token.sh` 默认请求 24h；实际有效期以 API Server 为准；**无自动轮换** |
 
-镜像 tag 不等同于不可变 digest；实测 RepoDigest 和环境版本以[验证记录](arc-0.15.0-validation.md)为准，重建需记录实际镜像摘要。
+镜像 tag 不等同于不可变 digest；具体部署选择版本时应遵守官方组件兼容性与供应链规范。[历史版本与运行记录](arc-0.15.0-validation.md)可作为实施参考，**不属于设计证明**。ARC [官方 Scale Set 文档](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)与 [Karmada Policy API](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)是能力依据。
 
 ## 3. 核心资源、Owner 与生命周期
 
@@ -41,7 +41,7 @@
 | ResourceBinding / Work | Karmada 上游 | 依据选定成员自动产生/清理；按实际 UID/对象关联收集证据，不硬编码生成名称 |
 | `ResourceInterpreterCustomization/pod-status-interpreter` | `01-karmada-interpreter.yaml` | 控制面扩展 `v1/Pod`，提供 ARC 需要的完整 Pod.status |
 
-当前空闲 Scale Set/Listener/基础 Secret 可常驻，不算泄漏；**本轮**临时 Pod/ER/JIT/关联 Binding/Work 已核对清理，**历史 ERS Finalizer 仍有残留**，不得强行清空未知 Finalizer 伪造结果。
+Scale Set/Listener/基础 Secret 属于常驻控制面资源；临时 Runner/Pod/JIT Secret 与关联 Binding/Work 应按各自上游生命周期回收。Finalizer 要保留资源所有权和安全恢复语义，不能以强制删除替代设计。[ARC 生命周期说明](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)是上游依据，跨 Karmada 的异步清理由本项目定义。
 
 ## 4. 精确传播策略契约
 
@@ -53,13 +53,13 @@
 | `arc-listener-propagation`（`arc-systems`） | Pod/SA 需同时匹配 `actions.github.com/scale-set-name: karmada-runner`、`actions.github.com/scale-set-namespace: arc-runners`；另匹配 Secret `karmada-token` | 仅 member1；`propagateDeps: true` 跟踪 Listener 动态配置 Secret |
 | `arc-runner-pod-propagation`（`arc-runners`） | 当前选择**命名空间内全部 Pod**，**没有** labelSelector | member1/member2；`propagateDeps: true`；`Divided / Weighted`；各独立 Pod 分别放置，**不保证每轮均匀覆盖成员** |
 
-不能把 ARC CRD/CR、Karmada 内部 Controller 或宿主 Docker Controller 当作 Runner Pod 传播；但在 `arc-runners` 新建的其他 Pod 可能因现有广域 selector 被传播。主 GitHub Secret 是否确需到成员是专项待核查点；先确定上游真实消费者，再提安全收敛变更与回归证据。
+不能把 ARC CRD/CR、Karmada 内部控制器或宿主 Controller 当作 Runner Pod 传播；当前示例的广域 selector 可能意外传播其他 Pod。**目标设计原则**：匹配 ARC 受管 Runner 的稳定标签，主 GitHub 凭证优先保留在 ARC 管理域，只下发执行所需的 JIT/运行依赖；具体 label 稳定性和引用关系须依据选定 ARC 版本资料审查。实际 Manifest 的收敛与运行兼容性属于实施任务，不阻塞设计文档闭环。参考 [Karmada 官方资源选择器](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)和 [Kubernetes RBAC 最小权限](https://kubernetes.io/docs/concepts/security/rbac-good-practices/)。
 
 ## 5. 接口、安全与跨控制面身份
 
 | 主体 | 目标 | 控制面身份与限制 |
 |---|---|---|
-| 宿主 ARC Controller | Karmada API | 使用只读挂载的 Karmada kubeconfig；PoC 实际为管理员级权限，**尚未最小化** |
+| ARC Controller 管理身份 | Karmada API | 参考示例为管理 kubeconfig；**目标设计应提供按最小权限授权的独立身份**，不可视管理员凭证为推荐配置 |
 | member1 ARC Listener | Karmada API | `hostAliases`、`KUBERNETES_SERVICE_HOST/PORT`、Karmada CA 与 Token；不是成员本地 ServiceAccount Token |
 | Runner Pod | GitHub Actions | 临时 JIT 注册；Runner SA 禁用 API Token 自动挂载 |
 | Karmada | 成员 Kubernetes API | 由 Karmada 上游成员加入凭证提供授权 |
@@ -68,33 +68,33 @@ Listener 精确 RBAC 见 [`03-rbac.yaml`](../manifests/03-rbac.yaml)：`arc-runn
 
 `setup-karmada-token.sh` 默认申请 `--duration=24h` 并保存 CA+Token 到 `arc-systems/karmada-token`。实际有效期由 API Server 控制；没有自动检测、轮换或无感知重载保证。手工轮换后需验证 Listener 实际加载新凭证并恢复 API 操作。x509/SAN/CA、401（认证）、403（授权）应分开定位。
 
-## 6. 部署与 Ready 契约
+## 6. 部署依赖与配置顺序（实现指导，非设计验收）
 
-命令以 [README 第五部分](../README.md#五-逐步复现操作指南) 为准，不把这些命令复制为架构设计。
+本节只是将接口依赖转换为建议的初始化顺序；实际命令见[README](../README.md)。完成本设计只需明确配置输入和依赖顺序，**无需运行任何命令或提供 Ready、Job、Kind、PoC 证据**。
 
 1. 准备 Docker、Kind、kubectl、karmadactl、gh、仓库权限、镜像和不入库的凭证；固定版本。
-2. 创建 `karmada-host`、member1、member2；启动 Karmada v1.19.0 并加入两个 Ready/Push 成员。**干净环境全流程未重新 E2E 验证**。
+2. 为部署规划 Karmada 控制面及候选成员网络、证书和访问路径；`karmada-host`、member1/member2 是示例拓扑，集群数量与版本由部署基线确定。
 3. 安装官方 ARC 0.15.0 CRD；创建 Namespace、`arc-github-secret`；应用 Lua 状态解释器与精确 Listener RBAC。
 4. 签发 `karmada-token`，核对 Token 期限、Listener 可达 endpoint、TLS SAN/CA；应用三个传播 Policy 并检查 selector、冲突对象及 `propagateDeps`。
 5. 根据当前环境替换 `githubConfigUrl`、控制面 IP/Port、镜像和集群参数；创建 RunnerSet；宿主侧运行官方 `scripts/run-arc-controller.sh`。
 6. **Ready**：两个成员 Ready；Listener **恰好一个**、0.15.0、Ready 且能建立 GitHub Session/访问 Karmada API。`minRunners=0` 时不要求空闲 Runner。
-7. **E2E**：真实三 Job 成功和状态/凭证/清理检查按[验收契约](ACCEPTANCE-CONTRACT.md)执行。就绪不等于端到端已经验证。
+7. **工程实施阶段**可按[独立测试计划](ENGINEERING-TEST-PLAN.md)进行真实 Job、分成员执行、故障与清理测试；这些测试**不能成为本设计文档完成的必要条件**。
 
 声明式 apply 不等于整个安装、Token 替换、Controller 重启和动态资源恢复均幂等。失败时保存脱敏事件、对象 UID/RV 和日志，修复出错阶段再执行；不要无审阅强制删除 CRD/CR/Finalizer，也不要在 GitHub dispatch 超时且状态未知时盲目重派发。
 
 ## 7. 异步、故障和恢复契约
 
-| 场景 | 观测 | 恢复责任 / 已验证边界 |
+| 场景 | 可观测状态 | 设计规定的恢复责任 / 约束 |
 |---|---|---|
-| JIT Secret 晚到 | `FailedMount` / Secret 暂缺，之后可 Ready | Karmada 异步同步、kubelet 重试；已观察到短暂失败后恢复，不是原子事务 |
-| 成员不可达 | Cluster Ready、Work/Binding 异常、API 失败 | Karmada 上游调谐；**运行中 Job 迁移、重新执行和自动容灾未经验证** |
+| JIT Secret 晚到 | `FailedMount` / Secret 暂缺，之后可 Ready | Karmada 按上游依赖传播规则调谐、成员 kubelet 按 Pod 依赖处理；**方案不要求 Secret/Pod 跨资源原子到达** |
+| 成员不可达 | Cluster Ready、Work/Binding 异常、API 失败 | Karmada 上游调谐；上游文档不承诺运行中 Job 无损迁移；不得将其作为设计默认保证 |
 | Pod Pending / ErrImagePull | Pod Event、调度失败、镜像拉取错误 | Kubernetes 原生重试，运维排查；不得私自重复创建会导致重复 Job 的 Runner |
-| Runner 注册失败 | GitHub queued、Runner 日志、Listener 错误 | ARC 管理生命周期；不得复用过期 JIT 凭证；故障演练待做 |
+| Runner 注册失败 | GitHub queued、Runner 日志、Listener 错误 | 由 ARC 生命周期与 GitHub Runner API 管理；不得复用过期 JIT 凭证，重试/去重需明确责任 |
 | 状态滞后/缺失 | 控制面无 `containerStatuses[].name` 或 Pod Ready | Lua 保留完整 status；**当前取 `statusItems` 第一个非空 status，只适用于单目标 Runner Pod**，不承诺多副本/迁移语义 |
 | Listener 身份失效 | x509、401、403、无法更新 ERS | 核对网络/SAN/CA/Token/Role，由运维手工恢复；无自动轮换保证 |
 | 本轮对象删除失败 | Pod/ER/JIT/Binding/Work UID 残留，Finalizer | ARC/Karmada 原生调谐；测试仅记录证据，未知历史 Finalizer 须独立分析 |
 
-`verify-arc.py --duration 180 --interval 3` 是**测试采样参数，不是系统恢复 SLA**；故障重试次数/生产 deadline、告警阈值和 HA 尚待设计。
+重试次数、故障恢复目标、告警窗口和生产 HA 是可配置的**业务/部署设计参数**，不能将仓库测试脚本的采样时间当作 SLA。设计已明确责任边界，不需要先运行测试才能形成契约。
 
 ## 8. 待决策问题和实现质量门槛
 
@@ -103,7 +103,7 @@ Listener 精确 RBAC 见 [`03-rbac.yaml`](../manifests/03-rbac.yaml)：`arc-runn
 - **D-03 状态聚合**：首个非空 status 仅用于当前单目标；多副本/迁移前须重新设计。
 - **D-04 生产化**：Controller 最小权限、Token 自动轮换、HA、故障切换、GitOps 与升级回滚尚未交付。
 - **D-05 调度收益**：两成员具备执行能力 ≠ 统计均衡或排队改善；需要独立负载与窗口实验。
-- **D-06 干净环境重建**：README 有路径，但须真实重建并保留脱敏证据，不得冒充通过。
-- **D-07 US-08 NPU**：资源名称/粒度、Device Plugin、节点标签及真实 NPU E2E 未验证。
+- **D-06 实施环境选择**：控制面、成员 API 网络、证书、镜像 digest 和存储持久化由部署方案确认；干净环境重建属后续工程验证，不阻塞设计。
+- **D-07 US-08 NPU**：按 Kubernetes Device Plugin 的扩展资源约定设计接口；具体资源名、分配粒度、驱动和硬件型号作为选型输入，真实 NPU E2E 为实施工作。
 
-所有变更必须标记 Story、受影响契约/Manifest、验收断言、脱敏证据和未验证事项；不得提交 PAT、Token、Secret Data、Kubeconfig 或私钥。
+设计变更必须标记 Story、上游文档依据、集成决策及接口/DFX 影响；**不能要求 PoC 或运行证据才能关闭设计评审**。实施阶段另行安排测试、脱敏记录及安全审计；不得提交 PAT、Token、Secret Data、Kubeconfig 或私钥。
