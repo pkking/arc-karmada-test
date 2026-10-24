@@ -1,6 +1,6 @@
 # ARC + Karmada 联邦调度执行子系统设计与验证说明
 
-> 版本：1.1
+> 版本：1.2（架构 + 独立实现/验收契约）
 > 验证基线：2026-10-15，ARC 0.15.0 / Karmada v1.19.0 / Kubernetes v1.37.0
 > 文档性质：原型设计与可复现验证；不作为生产部署验收报告
 
@@ -10,7 +10,7 @@
 
 本原型使用官方 ARC 0.15.0、Karmada v1.19.0 和两个 Kind 成员集群执行真实 GitHub Actions 任务。已验证 Runner 跨成员执行、JIT Secret 依赖传播、Pod 状态聚合、Listener 跨控制面认证和本轮资源清理。**本轮没有验证 NPU 工作负载、跨 Region 真实网络或生产级容量均衡。**
 
-本文采用逻辑、部署和场景等架构视角组织设计，组件均对应当前原型或明确标注的官方可选能力。验证数据来自 [运行验证记录](arc-0.15.0-validation.md) 和 [仓库配置](../README.md)。
+本文采用逻辑、部署和场景等架构视角组织设计，组件均对应当前原型或明确标注的官方可选能力。**本文件只描述架构决策与 Story 行为**；准确资源选择器、权限、环境参数和异常责任统一写入[实现契约](IMPLEMENTATION-CONTRACT.md)；Story 的前置条件、测试等级和证据规则统一写入[验收契约](ACCEPTANCE-CONTRACT.md)。部署操作见 [README](../README.md)，历史运行事实见[验证记录](arc-0.15.0-validation.md)。当前文档与契约的完善不等于已完成全新 Kind 环境重建。
 
 # 1. 模块介绍
 
@@ -128,6 +128,8 @@
 - **验收：** 用真实 NPU Workflow 检查节点选择、设备分配、任务成功率和释放。
 - **状态：** 本轮 PoC 运行验证未覆盖该用户故事。
 
+**验收分层原则：** T1 验证 Job 成功、Runner/JIT/状态与本轮清理；T2 分别验证 member1 和 member2 可独立执行；T3 的统计负载均衡与排队收益须独立定义工作负载、窗口和 SLO。**同一轮三个 Job 均成功但仅落在一个成员，不等于 T1 失败**。可执行定义见[验收契约](ACCEPTANCE-CONTRACT.md)。
+
 # 3. 模块设计
 
 ## 3.1 逻辑组件架构
@@ -186,6 +188,8 @@
 | Work | Karmada Binding Controller | 向成员集群下发 Kubernetes 对象 |
 | Pod status | 成员 Kubernetes | 经自定义 Resource Interpreter 回传给 ARC |
 
+**关键生命周期约束：** ARC 负责 Runner 期望数量和临时实例生命周期，Karmada 负责传播和状态反馈；二者通过异步调谐完成闭环，而不是同一事务。动态对象的 owner/finalizer 不由本模块重新实现。当前仅验证本轮临时资源回收，历史 ERS Finalizer 另列。资源的生产者、namespace、selector、目标成员和删除条件见[实现契约第 3～4 节](IMPLEMENTATION-CONTRACT.md)。
+
 ## 3.4 模块间接口
 
 | 源 | 目的 | 接口 / 数据 | 关键条件 |
@@ -198,6 +202,8 @@
 | 成员 Kubernetes | Karmada（复用） | Pod.status；由本原型声明的 ResourceInterpreterCustomization 规则聚合 | 控制面需保留容器名称、状态和 Ready conditions |
 | 依赖传播 | 成员 Kubernetes | Runner 所需 JIT Secret | `propagateDeps: true`；允许异步到达 |
 
+**集成失败边界：** Listener 跨控制面连接失败属于 TLS/Token/RBAC/网络契约问题；JIT Secret 晚到是异步依赖传播问题；成员 Pod Ready 与控制面状态不一致属于状态聚合问题。各故障的观测、重试责任和当前未验证能力详见[实现契约第 5～7 节](IMPLEMENTATION-CONTRACT.md)，不能要求业务方理解上游各 Controller 的内部实现。
+
 ## 3.5 质量属性
 
 | 属性 | 设计措施 | 验证状态 / 风险 |
@@ -209,7 +215,11 @@
 | 可观测性 | verify-arc.py 采集运行、Pod/Secret、UID/RV 和清理证据 | JSON 已脱敏；尚未构建统一 NPU 使用率监控 |
 | 可维护性 | 复用 ARC / Karmada 上游能力，最小化自定义代码 | 自定义内容限于 Lua 聚合器、配置和测试脚本 |
 
+**当前风险进一步明确：** 基础策略将主 GitHub Secret 传播至两成员、Runner Pod 策略选择整个 `arc-runners` 命名空间的 Pod，属于需要依赖与安全性核查的配置；Pod Lua 状态聚合当前采用首个有 status 的成员记录，仅适用于本 PoC 单目标 Runner Pod。不能将上述当前行为默认为最小权限、通用多副本能力。
+
 # 4. Story 设计
+
+运行视图仍采用 Mermaid 时序图，描述模块协作与外部体验，不复刻上游控制器的内部设计。正常分支、必要异常分支和对应实现/验收条款分别参见[实现契约](IMPLEMENTATION-CONTRACT.md)及[验收契约](ACCEPTANCE-CONTRACT.md)。
 
 ## 4.1 US-01：按统一标签提交任务
 
@@ -525,20 +535,24 @@ sequenceDiagram
 
 **前置工作：** 核对 Runner 模板、NPU 设备插件、资源名称、节点标签、资源分配粒度和网络路径。需要真实 NPU 作业测试。
 
-**验证状态：** 尚无本仓库 PoC 的 NPU 工作负载实测证据。
+**验证状态：** 尚无本仓库 PoC 的 NPU 工作负载实测证据；不纳入本轮 P0 功能验收。
 
-# 5. 用户故事与实测证据
+# 5. Story → 契约 → 实现 → 验收 → 证据
 
-| Story | 验证入口 | 状态 |
-|---|---|---|
-| US-01 统一标签 | [Run 38667994949](https://github.com/pkking/arc-karmada-test/actions/runs/38667994949) | 已验证 |
-| US-02 Runner 生命周期 | [Run 38667994949](https://github.com/pkking/arc-karmada-test/actions/runs/38667994949)、[运行记录](arc-0.15.0-validation.md) | 已验证本轮 |
-| US-03 多成员分发 | [多成员证据](evidence/arc-0.15.0-multicluster.json)、[覆盖不足证据](evidence/arc-0.15.0-single-cluster-coverage-failed.json)、[member2 定向证据](evidence/arc-0.15.0-directed-member2.json) | 已验证成员执行能力；未证明均匀分布 |
-| US-04 JIT Secret | [运行记录](arc-0.15.0-validation.md)、[最终状态](evidence/arc-0.15.0-final-state.json) | 已验证 |
-| US-05 Listener 认证 | [运行记录](arc-0.15.0-validation.md) | 已验证 PoC 身份和稳定窗口 |
-| US-06 Pod 状态 | [Resource Interpreter](../manifests/01-karmada-interpreter.yaml)、[运行记录](arc-0.15.0-validation.md) | 已验证 |
-| US-07 本轮清理 | [最终状态](evidence/arc-0.15.0-final-state.json) | 已验证本轮；历史遗留单列 |
-| US-08 NPU 执行 | 当前没有可引用的 NPU 任务运行记录 | 待验证 |
+本表是**架构级追踪矩阵**；精确参数、测试步骤、超时与失败归因由[实现契约](IMPLEMENTATION-CONTRACT.md)和[验收契约](ACCEPTANCE-CONTRACT.md)统一规定。以下状态均是 **2026-10-15 既有实测结论**，不是本次修改后重新执行了完整 E2E。
+
+| Story / 架构能力 | 实现与契约锚点 | 验收依据 | 状态 |
+|---|---|---|---|
+| US-01 统一标签入口 | [RunnerSet](../manifests/04-autoscalingrunnerset.yaml)、[Workflow](../.github/workflows/test-arc.yml)；[契约 §2](IMPLEMENTATION-CONTRACT.md) | [真实 Run 38667994949](https://github.com/pkking/arc-karmada-test/actions/runs/38667994949)、T1 | 已验证 |
+| US-02 集中 Runner 生命周期 | 官方 ARC Controller、[启动脚本](../scripts/run-arc-controller.sh)；[资源契约](IMPLEMENTATION-CONTRACT.md) | [验证记录](arc-0.15.0-validation.md)、本轮清理 T1 | 已验证本轮 |
+| US-03 跨成员执行 | [传播策略](../manifests/02-propagation-policies.yaml)；[传播契约](IMPLEMENTATION-CONTRACT.md) | [2:1](evidence/arc-0.15.0-multicluster.json)、[3:0](evidence/arc-0.15.0-single-cluster-coverage-failed.json)、[member2 定向](evidence/arc-0.15.0-directed-member2.json)；T1/T2 | 成员能力已验证；均衡 T3 未验证 |
+| US-04 JIT Secret 随 Pod | [传播策略](../manifests/02-propagation-policies.yaml)；[依赖契约](IMPLEMENTATION-CONTRACT.md) | [验证记录](arc-0.15.0-validation.md)、T1 | 已验证异步同成员可用 |
+| US-05 Listener 控制面鉴权 | [RBAC](../manifests/03-rbac.yaml)、[Token 脚本](../scripts/setup-karmada-token.sh)；[身份契约](IMPLEMENTATION-CONTRACT.md) | [稳定窗口证据](evidence/arc-0.15.0-directed-member2.json)、T1 | 当前身份已验证；自动轮换未验证 |
+| US-06 Pod 状态聚合 | [Lua 解释器](../manifests/01-karmada-interpreter.yaml)；[状态契约](IMPLEMENTATION-CONTRACT.md) | [验证记录](arc-0.15.0-validation.md)、T1 | 已验证单目标；多副本未验证 |
+| US-07 本轮临时对象清理 | ARC/Karmada 生命周期、[验证脚本](../scripts/verify-arc.py)；[生命周期契约](IMPLEMENTATION-CONTRACT.md) | [最终状态证据](evidence/arc-0.15.0-final-state.json)、T1 | 本轮通过，历史 ERS 遗留 |
+| US-08 NPU 任务执行 | 仅目标架构；[待决策 D-07](IMPLEMENTATION-CONTRACT.md) | 无真实 NPU E2E；需要专用 E2E | **待验证** |
+
+**验证分级：** T0 静态符合性；T1 确定性功能；T2 成员分别定向可执行；T3 统计负载均衡及排队收益。现有 `verify-arc.py` 默认强制单轮两成员覆盖；新增 `--coverage-mode report-only` 仅记录覆盖，不因此判定功能失败。两者必须显式选择并保留观测结果；不能通过削弱旧断言伪造通过。
 
 # 6. 已知限制与下一步验证
 
