@@ -186,7 +186,11 @@ kind create cluster --name member2 --image="${KIND_NODE_IMAGE}"
 KARMADA_VERSION="v1.19.0"
 KUBERNETES_VERSION="v1.37.0"
 
+# karmadactl init 默认使用 /etc/karmada，非 root 环境须显式使用可写目录
+install -d -m 0700 "$HOME/karmada-data" "$HOME/karmada-data/pki"
 karmadactl init --kubeconfig="$HOME/.kube/config" --context=kind-karmada-host \
+  --karmada-data="$HOME/karmada-data" \
+  --karmada-pki="$HOME/karmada-data/pki" \
   --crds="https://github.com/karmada-io/karmada/releases/download/${KARMADA_VERSION}/crds.tar.gz" \
   --karmada-aggregated-apiserver-image="docker.io/karmada/karmada-aggregated-apiserver:${KARMADA_VERSION}" \
   --karmada-controller-manager-image="docker.io/karmada/karmada-controller-manager:${KARMADA_VERSION}" \
@@ -197,7 +201,7 @@ karmadactl init --kubeconfig="$HOME/.kube/config" --context=kind-karmada-host \
   --kube-image-tag="${KUBERNETES_VERSION}" \
   --etcd-image="registry.k8s.io/etcd:3.7.0-0"
 ```
-安装完成后，Karmada 控制面的 Kubeconfig 默认生成在 `$HOME/.kube/karmada.config` 或自定义路径（如 `$HOME/karmada-data/karmada-apiserver.config`）。
+安装完成后，Karmada 控制面 kubeconfig 的实际生成位置由 `karmadactl` 版本及 `--karmada-data` 决定。**下续步骤统一使用** `$HOME/karmada-data/karmada-apiserver.config`；运行前须核实该文件存在且可安全访问，不得照搬另一台机器的证书或凭证。
 
 #### 1.3 将成员集群加入 Karmada
 ```bash
