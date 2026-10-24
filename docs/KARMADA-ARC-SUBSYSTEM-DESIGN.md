@@ -415,6 +415,310 @@ Watchdog 检查 Lease 和放置进展。Janitor 清理过期节点 reservation�
 | Metrics / Timeline / Trace | pkg/metrics、pkg/dispatcher、pkg/config | 解释排队、容量、放置、grant、reservation、成员 staleness 和故障恢复过程 | Prometheus 指标；JSONL job record / decision trace / hold reasons；stdout timeline 与受限 debug view | 可解释性：按任务追踪；安全：避免公开仓库或普通日志泄露工作负载身份；性能：文件轮转、debug ring 有界 |
 | 模拟与差分验证 | sim/、pkg/engine、pkg/replay、test/ | 支持在真实流量窗口重放和比较策略，减少直接在生产集群试错 | Python reference simulator、Go replay、golden fixtures、invariant tests、livediff、可选真实 trace 校准 | 正确性：防止策略漂移；可维护性：固定输入复现；限制：合成容量模型不能证明真实集群绝对等待时间 |
 
+### 3.1.1 模块间逻辑架构
+
+下图展示模块间的主要控制流和数据流。Dispatcher 协调单轮调度；State Provider 生成状态快照；Ledger 计算容量；Policy 生成决策；Holder 和 Actuator 分别执行 ResourceBinding 与节点预留写操作。
+
+```mermaid
+flowchart TB
+    ARC["ARC Controller / Listener"] --> RB["Karmada ResourceBinding"]
+    RB --> STATE["State Provider"]
+    NODES["Member Nodes / Pods / Runner 状态"] --> STATE
+    STATE --> SNAP["Snapshot"]
+    SNAP --> LEDGER["Ledger"]
+    QUEUE["Runner 队列 / 声明需求"] --> ENGINE["Live Adapter / Engine"]
+    LEDGER --> ENGINE
+    ENGINE --> POLICY["Policy Library"]
+    POLICY --> ENGINE
+    ENGINE --> EST["Estimator Cross-check（可选）"]
+    ENGINE --> HOLDER["ResourceBinding Holder"]
+    ENGINE --> ACT["Node Reservation Actuator"]
+    HOLDER --> RB
+    ACT --> NODES
+    CONFIG["Config / Startup Validation"] --> DISP["Dispatcher Loop / Lease"]
+    DISP --> STATE
+    DISP --> ENGINE
+    TIMEOUT["Timeout Evaluator"] --> ENGINE
+    WD["Watchdog / Break-glass"] -. "故障接管" .-> DISP
+    JAN["Reservation Janitor"] --> NODES
+    REAPER["Orphan Reaper"] --> NODES
+    ENGINE --> OBS["Metrics / Timeline / Trace"]
+    HOLDER --> OBS
+    ACT --> OBS
+    OBS --> REPLAY["Simulator / Differential Validation"]
+```
+
+### 3.1.2 各模块内部逻辑架构
+
+#### 3.1.2.1 ARC / Karmada 接入配置
+
+该模块接收 GitHub Actions 任务，创建 ARC Runner 资源，并由 Karmada 生成待放置的 ResourceBinding。资源解释器将 Runner 声明的 NPU 需求写入调度可见的 `replicaRequirements`。
+
+```mermaid
+flowchart TB
+    GH["GitHub Actions Job / runs-on"] --> LISTENER["ARC Listener"]
+    LISTENER --> ERS["EphemeralRunnerSet / EphemeralRunner"]
+    ERS --> RUNNER["Runner Pod + JIT Secret"]
+    RUNNER --> DETECTOR["Karmada Detector"]
+    DETECTOR --> RB["ResourceBinding"]
+    SCALESET["Scale Set NPU 声明"] --> INTERPRETER["Resource Interpreter"]
+    INTERPRETER --> RB
+    POLICY["PropagationPolicy / OverridePolicy"] --> RB
+    RB --> BINDING["Karmada Binding Controller"]
+    BINDING --> WORK["Work"]
+    WORK --> MEMBER["成员集群 Runner Pod"]
+```
+
+#### 3.1.2.2 配置与启动校验
+
+配置模块解析 federation、成员、Scale Set、策略、租约和资源回收参数。校验失败时停止启动，并输出字段或引用错误。
+
+```mermaid
+flowchart TB
+    YAML["FederationConfig YAML"] --> PARSE["严格解析 / 未知字段检查"]
+    PARSE --> DEFAULTS["填充默认值"]
+    DEFAULTS --> VALIDATE["字段、引用和约束校验"]
+    VALIDATE -->|失败| ERROR["启动失败 / 错误定位"]
+    VALIDATE -->|通过| RESOLVED["resolved-config"]
+    RESOLVED --> DISPATCHER["启动 Dispatcher"]
+```
+
+#### 3.1.2.3 Karmada State Provider
+
+State Provider 从 informer 或 Cluster Proxy 读取控制面与成员集群状态，统一转换为 Snapshot，并记录数据时间和成员健康状态。
+
+```mermaid
+flowchart TB
+    RB["ResourceBinding / EphemeralRunner"] --> NORMALIZE["对象归一化"]
+    SEARCH["karmada-search informer"] --> NORMALIZE
+    PROXY["Cluster Proxy polling / cold-start resync"] --> NORMALIZE
+    PODS["Member Nodes / Pods"] --> NORMALIZE
+    NORMALIZE --> FRESH["检查完整性、时间戳和 staleness"]
+    FRESH -->|完整且新鲜| SNAPSHOT["不可变 Snapshot"]
+    FRESH -->|失败或过期| DEGRADED["标记成员 degraded / stale"]
+    SNAPSHOT --> LEDGER["Ledger 输入"]
+    DEGRADED --> ENGINE["阻止该成员接收新任务"]
+```
+
+#### 3.1.2.4 容量账本 Ledger
+
+Ledger 以节点为单位核算可用容量。它同时计算真实工作负载、其他租户负载、未落地的 grant、draining 状态和节点预留。
+
+```mermaid
+flowchart TB
+    SNAP["Snapshot"] --> PHYSICAL["统计已绑定的非终态 Pod 请求"]
+    SNAP --> BACKGROUND["统计其他租户背景负载"]
+    SNAP --> GRANTS["重建 / 更新 open grants"]
+    SNAP --> DRAIN["读取 draining 与 reservation 状态"]
+    PHYSICAL --> CALC["按节点和 allocationGranularity 核算"]
+    BACKGROUND --> CALC
+    GRANTS --> CALC
+    DRAIN --> CALC
+    CALC --> FREE["输出 free units / capacity ledger"]
+    FREE --> POLICY["Policy / Engine"]
+    SNAP -->|不完整或过期| BLOCK["标记容量不可用"]
+```
+
+#### 3.1.2.5 策略库 Policy
+
+Policy 接收已排序的任务队列、兼容性要求和 Ledger 容量。它输出 release、hold、backfill 或 reservation 决策，不直接写 Kubernetes 对象。
+
+```mermaid
+flowchart TB
+    QUEUE["稳定队列顺序（queued-since, UID）"] --> SELECT["选择队列头部"]
+    CAP["Ledger 可用容量"] --> FIT["硬件兼容与容量匹配"]
+    SELECT --> FIT
+    FIT -->|头部可执行| RELEASE["Release / 放置决策"]
+    FIT -->|头部阻塞且未达门槛| HOLD["Hold + 原因"]
+    FIT -->|头部阻塞且达到门槛| RESERVE["选择 reservation 目标"]
+    RESERVE --> BACKFILL["保留目标容量并评估 backfill"]
+    BACKFILL --> DECISION["Decision / Outcome"]
+    RELEASE --> DECISION
+    HOLD --> DECISION
+```
+
+#### 3.1.2.6 Live Adapter / Engine
+
+Engine 将 Snapshot、队列和 Ledger 转换为策略输入，执行单轮决策，并生成需要释放的 RB、节点预留差异和等待原因。
+
+```mermaid
+flowchart TB
+    SNAP["Snapshot"] --> BUILDER["稳定 Job ID / Queue Arrival"]
+    BUILDER --> INPUT["构建策略输入"]
+    LEDGER["Ledger"] --> INPUT
+    INPUT --> POLICY["调用纯 Go Policy"]
+    POLICY --> DIFF["计算 release / hold / reservation diff"]
+    DIFF --> LIVE["Live Applier"]
+    DIFF --> SHADOW["Shadow 比较记录"]
+    LIVE --> HOLDER["Holder 执行 RB 写入"]
+    LIVE --> ACTUATOR["Actuator 执行节点预留"]
+    DIFF --> OUTCOME["Decision / Outcome / Hold reason"]
+    OUTCOME --> METRICS["Metrics / Timeline / Trace"]
+    DRYRUN["--dry-run"] -. "禁用写操作" .-> LIVE
+```
+
+#### 3.1.2.7 ResourceBinding Holder
+
+Holder 是 ResourceBinding 放置和 EphemeralRunner 删除的唯一写入路径。它通过 UID、placement 和 `resourceVersion` 检查保护并发写入，并在 RB 成功释放后建立 grant。
+
+```mermaid
+flowchart TB
+    REQUEST["Engine 放置请求"] --> READ["重新读取 ResourceBinding"]
+    READ --> CHECK["检查 UID / schedulerName / placement / replicas"]
+    CHECK -->|已放置| ADOPT["恢复已有 grant / 返回 AlreadyPlaced"]
+    CHECK -->|状态冲突| CONFLICT["返回 Conflict / Gone"]
+    CHECK -->|允许释放| PATCH["条件 PATCH spec.clusters 与放置元数据"]
+    PATCH -->|成功| GRANT["打开 grant 并记录 outcome"]
+    PATCH -->|失败| RETRY["返回错误，下一轮重新读取"]
+    GRANT --> RESULT["放置结果"]
+```
+
+#### 3.1.2.8 Node Reservation Actuator
+
+Actuator 将策略生成的 reservation diff 转换为成员节点 taint 和元数据变更。每次写入前执行节点状态、预算、现有 taint、reservation group 和期限检查。
+
+```mermaid
+flowchart TB
+    DIFF["Reservation diff"] --> GUARD["Guardrails 校验"]
+    GUARD -->|拒绝| REJECT["拒绝写入并记录原因"]
+    GUARD -->|通过| ACTION["创建 / 续租 / 释放"]
+    ACTION --> PATCH["Cluster Proxy PATCH Node"]
+    PATCH --> STATE["更新 reservation group / reserved-until"]
+    STATE --> OBS["记录结果与指标"]
+```
+
+#### 3.1.2.9 Estimator Cross-check
+
+Estimator 为可选的容量交叉检查。启用后，Engine 将候选成员的 Ledger 结果与成员 scheduler estimator 返回的可容纳副本数进行比较。超时或校验失败不能直接证明资源可用。
+
+```mermaid
+flowchart TB
+    CANDIDATE["Ledger 候选结果"] --> ENABLED{"Estimator 已启用？"}
+    ENABLED -->|否| LEDGERONLY["使用 Ledger 结果"]
+    ENABLED -->|是| RPC["gRPC MaxAvailableReplicas"]
+    RPC --> COMPARE["比较估算容量与 Ledger"]
+    COMPARE -->|符合| ACCEPT["允许继续决策"]
+    COMPARE -->|分歧且 strict| BLOCK["阻止释放并记录原因"]
+    COMPARE -->|分歧且 advisory| WARN["记录分歧并按策略处理"]
+    RPC -->|超时 / 认证失败| ERROR["记录错误；不得视为容量可用"]
+```
+
+#### 3.1.2.10 Dispatcher Loop / Lease
+
+Dispatcher Loop 管理每个 federation 的领导权、冷启动重建、周期调度和写入门禁。失去 Lease 或 epoch 失效后，当前实例停止写操作。
+
+```mermaid
+flowchart TB
+    START["加载已校验配置"] --> LEADER["Lease Leader Election"]
+    LEADER --> COLD["Cold-start 完整读取状态"]
+    COLD --> REBUILD["重建 Snapshot / Ledger / Grants"]
+    REBUILD --> READY{"状态完整且新鲜？"}
+    READY -->|否| WAIT["保持 ready-to-place 关闭"]
+    READY -->|是| TICK["事件触发 + 固定 decision grid"]
+    TICK --> OBSERVE["获取 Snapshot"]
+    OBSERVE --> DECIDE["Ledger + Policy + Engine"]
+    DECIDE --> WRITE["Holder / Actuator 写入"]
+    WRITE --> TICK
+    LEADER -->|Lease 丢失 / epoch 变化| STOP["停止写入并退出领导状态"]
+```
+
+#### 3.1.2.11 Timeout Evaluator
+
+Timeout Evaluator 使用可控时钟和当前 Snapshot 计算超时动作。它识别 max-hold、放置超时、失效注册、grant 关闭和队列头部消失等情况。
+
+```mermaid
+flowchart TB
+    INPUT["Snapshot + Queue + Grants + Reservations + Clock"] --> EVAL["纯函数式超时评估"]
+    EVAL --> HOLD["max-hold 到期"]
+    EVAL --> PLACE["placement / registration 超时"]
+    EVAL --> GRANT["grant 关闭条件满足"]
+    EVAL --> HEAD["reservation head 已消失"]
+    HOLD --> ACTION["生成待执行动作"]
+    PLACE --> ACTION
+    GRANT --> ACTION
+    HEAD --> ACTION
+    ACTION --> ENGINE["Engine / Holder / Actuator"]
+```
+
+#### 3.1.2.12 Watchdog / Break-glass
+
+Watchdog 独立检查 Dispatcher Lease 的新鲜度和放置进展。超过配置阈值时，它扩容备用 Karmada scheduler；接管与回切须经过目标版本的并发写入测试。
+
+```mermaid
+flowchart TB
+    LEASE["Dispatcher Lease"] --> CHECK["检查 Lease 新鲜度"]
+    PROGRESS["Placing 时间戳 / 放置进展"] --> CHECK
+    CHECK --> HEALTH{"Lease 与进展正常？"}
+    HEALTH -->|是| MONITOR["继续监控"]
+    HEALTH -->|否，超过阈值| SCALE["扩容 break-glass scheduler"]
+    SCALE --> STOCK["Stock scheduler 接管对应 RB"]
+    STOCK --> ALERT["记录接管事件并告警"]
+```
+
+#### 3.1.2.13 Reservation Janitor
+
+Janitor 扫描成员节点，只清理符合本调度模块 taint 契约且连续两轮确认过期的 reservation。扫描失败或状态不确定时保留 taint。
+
+```mermaid
+flowchart TB
+    SCAN["周期扫描成员节点"] --> OWNED["检查本模块 reservation taint"]
+    OWNED --> EXPIRY["检查 reserved-until / 续租状态"]
+    EXPIRY -->|未过期或状态不确定| KEEP["保留 taint"]
+    EXPIRY -->|连续两轮确认过期| REMOVE["移除本模块 taint 与元数据"]
+    REMOVE --> METRICS["记录清理结果"]
+```
+
+#### 3.1.2.14 Orphan Reaper
+
+Reaper 仅处理满足 workflow Pod 标签、命名形态和缺失窗口条件的孤儿 Pod。它通过 grace period 和重复观察降低误删活跃任务的风险。
+
+```mermaid
+flowchart TB
+    LIST["按 namespace 扫描成员 Pod"] --> FILTER["匹配 workflow 标签与名称形态"]
+    FILTER --> RUNNER["检查 Runner / Owner 关联"]
+    RUNNER --> WINDOW["检查缺失窗口与 grace period"]
+    WINDOW -->|Runner 仍存在或证据不足| KEEP["保留 Pod"]
+    WINDOW -->|连续确认孤儿| DELETE["删除 workflow / step 孤儿 Pod"]
+    DELETE --> TRACE["记录删除原因与结果"]
+```
+
+#### 3.1.2.15 Metrics / Timeline / Trace
+
+观测模块汇总调度结果、容量变化、等待原因、grant、reservation 和成员健康状态。输出按任务追踪的时间线和结构化决策轨迹，并对敏感字段脱敏。
+
+```mermaid
+flowchart TB
+    ENGINE["Engine / Decision"] --> EVENTS["标准化调度事件"]
+    HOLDER["Holder 结果"] --> EVENTS
+    ACTUATOR["Reservation 结果"] --> EVENTS
+    STATE["成员健康 / staleness"] --> EVENTS
+    EVENTS --> METRICS["Prometheus 指标"]
+    EVENTS --> JSONL["JSONL Decision Trace"]
+    EVENTS --> TIMELINE["Runner Timeline / Hold Reasons"]
+    EVENTS --> DEBUG["有界 Debug Ring / Endpoint"]
+    REDACT["字段过滤 / 标签基数限制"] --> METRICS
+    REDACT --> JSONL
+    REDACT --> TIMELINE
+    REDACT --> DEBUG
+```
+
+#### 3.1.2.16 模拟与差分验证
+
+验证模块使用相同的 trace、配置和策略语义运行 Python reference simulator 与 Go replay，比较决策差异，并输出不变量、覆盖率和跳过项。
+
+```mermaid
+flowchart TB
+    TRACE["标准化 Workflow Trace"] --> PY["Python Reference Simulator"]
+    TRACE --> GO["Go Replay / Engine"]
+    CONFIG["同一配置与容量模型"] --> PY
+    CONFIG --> GO
+    PY --> COMPARE["差分比较与 Invariant 检查"]
+    GO --> COMPARE
+    FIXTURES["Golden Fixtures / 边界用例"] --> COMPARE
+    COMPARE --> REPORT["差异、覆盖率、skip 与校准报告"]
+```
+
+
 ## 3.2 核心数据模型
 
 | 数据对象 | 作用 | 关键约束 |
