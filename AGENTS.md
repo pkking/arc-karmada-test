@@ -9,6 +9,7 @@
 3. [验收契约](docs/ACCEPTANCE-CONTRACT.md)：T0/T1/T2/T3 的不同通过条件与 Story 追踪。
 4. [README](README.md) 和对应 `manifests/`、`scripts/`、`tests/`：事实基线及操作。
 5. [运行验证及限制](docs/arc-0.15.0-validation.md)、[证据目录](docs/evidence/)：已验证与未验证的界限。
+6. [安全审查](docs/SECURITY-REVIEW.md) 与 [重建验收清单](docs/REBUILD-VALIDATION.md)：当前 Secret 传播风险、从零 Kind 验证进度及需要真实执行的 T1/T2。
 
 **优先信任与版本匹配的源码/Manifest、现有实测证据。** 文档互相矛盾时，应报告并修订，不能隐式选择更方便的解释。
 
@@ -30,7 +31,7 @@
 - Karmada Pod 状态 Lua 当前只取第一个非空 status；不要宣称支持多副本状态融合或运行中迁移。
 - Listener 必须持控制面 SA 的 Token/CA，通过 TLS SAN 和最小 RBAC 访问 Karmada API；当前 Token 手工签发/轮换，Controller 使用管理 kubeconfig。
 - `Divided / Weighted` 对独立 Pod **不保证逐轮两成员覆盖**；不能用一次 2:1 宣称统计负载均衡。
-- 当前 NPU、HA、自动 Token 轮换、生产级容量优化与全新环境重建均没有对应的完整端到端验证，不得标为已通过。
+- 全新 Kind/Karmada 初始化和 Manifest dry-run 已通过 [CI #40111697216](https://github.com/pkking/arc-karmada-test/actions/runs/40111697216)，但真实 GitHub Runner Job 的全新环境 T1/T2 **未验收**；NPU、HA、自动 Token 轮换和生产级容量优化仍不在已验证范围。
 - 不得打印或提交真实 PAT、Token、Secret Data、Kubeconfig、GitHub App 私钥、证书私钥，证据需脱敏。
 
 ## 4. 推荐验证流程
