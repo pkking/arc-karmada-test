@@ -45,8 +45,8 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         section = self.design.split("## 2.4 系统需求 SR", 1)[1].split("\n## 2.5 ", 1)[0]
         functional = section.split("### 2.4.1 功能需求", 1)[1].split("### 2.4.2 非功能需求", 1)[0]
         nonfunctional = section.split("### 2.4.2 非功能需求", 1)[1].split("### 2.4.3 ", 1)[0]
-        function_ids = re.findall(r"(?m)^\\| \\*\\*(SR-\\d\\d-\\d\\d)\\*\\* \\|", functional)
-        nfr_ids = re.findall(r"(?m)^\\| \\*\\*(SR-NF-\\d\\d)\\*\\* \\|", nonfunctional)
+        function_ids = re.findall(r"(?m)^\| \*\*(SR-\d\d-\d\d)\*\* \|", functional)
+        nfr_ids = re.findall(r"(?m)^\| \*\*(SR-NF-\d\d)\*\* \|", nonfunctional)
         self.assertEqual(len(function_ids), 9)
         self.assertEqual(len(nfr_ids), 9)
         for requirement in ("安全性", "可靠性", "可服务性", "性能与容量",
