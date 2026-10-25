@@ -470,7 +470,7 @@ Kubernetes Device Plugin 负责向成员 Kubernetes 发布扩展设备资源（U
 
 ### 5.1.1 功能概述
 
-**关联需求**：SR-01-01、SR-01-02；**用例**：UC-01 通过统一标签提交工作流、UC-02 无匹配或无可用 Runner；**功能域规格**：SP-01。
+**关联的正式系统需求**：SR-01-01；**用例**：UC-01 通过统一标签提交工作流、UC-02 无匹配或无可用 Runner（异常处理，不单列 SR）；**功能域规格**：SP-01。
 
 F-01 为开发者提供稳定的 Runner 服务名称。开发者在 GitHub Actions 工作流的 `runs-on` 字段中填写该名称，不需要知道执行集群的名称或地址。平台负责配置 Runner 服务名称、GitHub 目标和 Runner 模板。
 
@@ -981,7 +981,7 @@ sequenceDiagram
 
 ### 5.6.1 功能概述
 
-**关联需求**：SR-06-01；**用例**：UC-07 请求 NPU Runner 并在兼容节点执行、UC-13 NPU 资源不足或设备插件不可用；**功能域规格**：SP-02、SP-08。
+**扩展设计，当前无正式核心 SR**：原候选需求 SR-06-01 暂不纳入第 2.4 节；**用例**：UC-07 请求 NPU Runner 并在兼容节点执行、UC-13 NPU 资源不足或设备插件不可用；**功能域规格**：SP-02、SP-08。仓库当前没有 NPU 资源请求或插件部署配置，本节仅提供未来选型后的实施参考。
 
 F-06 允许 CI 开发者选择具有 NPU 能力的 Runner 服务。平台使用成员 Kubernetes 的扩展资源信息配置 Runner Pod 的设备请求，并将该 Pod 分发至满足设备、驱动和运行环境约束的成员集群。
 
@@ -1087,12 +1087,12 @@ sequenceDiagram
 
 | SR | 功能 | 关联规格 | 运行视图 | 开发实现入口 |
 |---|---|---|---|---|
-| SR-01-01、SR-01-02 | F-01 | SP-01 | 5.1.4.1 | `04-autoscalingrunnerset.yaml`、GitHub Workflow |
-| SR-02-01、SR-02-02 | F-02 | SP-01、SP-07 | 5.2.4.1 / 5.2.4.2 | 官方 ARC、RunnerSet、对象生命周期契约 |
-| SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、关联资源 |
-| SR-04-01 | F-04 | SP-04、SP-05 | 5.4.4.1 | `03-rbac.yaml`、`04-autoscalingrunnerset.yaml` Listener Template |
-| SR-05-01 | F-05 | SP-06 | 5.5.4.1 | `01-karmada-interpreter.yaml` |
-| SR-06-01 | F-06 | SP-02、SP-08 | 5.6.4.1 / 5.6.4.2 | Runner Pod 资源模板、成员设备插件和 Placement |
+| FT-01：SR-01-01 | F-01 | SP-01 | 5.1.4.1（UC-02 为异常场景） | `04-autoscalingrunnerset.yaml`、GitHub Workflow |
+| FT-01/FT-04：SR-02-01、SR-02-02 | F-02 | SP-01、SP-07 | 5.2.4.1 / 5.2.4.2 | 官方 ARC、RunnerSet、对象生命周期契约 |
+| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、关联资源 |
+| FT-03：SR-04-01 | F-04 | SP-04、SP-05 | 5.4.4.1 | `03-rbac.yaml`、`04-autoscalingrunnerset.yaml` Listener Template |
+| FT-03：SR-05-01 | F-05 | SP-06 | 5.5.4.1 | `01-karmada-interpreter.yaml` |
+| **扩展候选：原 SR-06-01，当前非正式 SR** | F-06 | SP-02、SP-08 | 5.6.4.1 / 5.6.4.2 | 尚需设备选型；仓库未配置 NPU 扩展资源 |
 
 ### 5.7.1 非功能需求与详细设计追踪
 
@@ -1104,11 +1104,9 @@ sequenceDiagram
 | SR-NF-04 可服务性 | SP-09 | 5.1～5.6 各功能的 DFX |
 | SR-NF-05 性能与容量 | SP-01、SP-09 | 5.1.9、5.2.9；量化参数 P-SR-01、P-SR-02 |
 | SR-NF-06 成本与资源利用 | SP-01、SP-07 | 5.2.3、5.2.9；量化参数 P-SR-04 |
-| SR-NF-07 兼容性 | SP-09 | 3.1、3.2、3.7、5.1～5.6 的接口设计 |
 | SR-NF-08 策略可维护性 | SP-01、SP-02 | 4.2、4.3、5.3.6 |
-| SR-NF-09 可用性 | SP-09 | 4.7、5.2.9、5.3.9；量化参数 P-SR-03 |
 
-本表将 SR 关联到负责落实要求的设计章节，并不把第 4、5 章的实施细节重新定义为系统需求。量化参数未获得业务批准时，对应指标保持待定，不得作为已满足的验收值。
+本表只将与 FT-01～FT-04 相关的正式 SR 关联至详细设计。第 4、5 章仍可保存 ARC/Karmada 的必要技术契约和 NPU 扩展参考，但不把所有实现机制或通用 DFX 项目升级为正式系统需求。量化参数未获得业务批准时，对应指标保持待定。
 
 **统一资料来源及版本边界**：本文件 3.7 给出 ARC/GitHub Actions、Karmada、Kubernetes 官方文档索引；本仓库现有 Manifest 用于定位配置差异；任何仅有内部运行记录支持、而无上游接口规范支持的声明都应标明为集成设计假设。缺少 PoC 不构成功能设计缺口，但 **SR/接口/异常/DFX 未定义**属于设计缺口。
 
