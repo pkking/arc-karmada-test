@@ -28,7 +28,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         for n in range(1, 7):
             for part in ("1 功能概述", "3 实现思路", "4 设计思路",
                          "5 用户接口设计", "6 实现接口设计", "9 DFX分析"):
-                self.assertRegex(self.design, rf"(?m)^### 5\\.{n}\\.{part}$")
+                self.assertRegex(self.design, rf"(?m)^### 5\.{n}\.{part}$")
             self.assertIn(f"#### 5.{n}.6.1 接口设计", self.design)
             block = self.design.split(f"## 5.{n} ", 1)[1].split("\n## 5.", 1)[0]
             self.assertIn("FMEA", block)
