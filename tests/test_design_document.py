@@ -73,14 +73,17 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
             self.assertIn(feature, self.design)
 
-    def test_federated_features_have_code_traceability(self):
+    def test_federated_features_remain_reader_facing(self):
         overview = self.design.split("## 2.2 本功能域的系统特性", 1)[1].split("## 2.3 ", 1)[0]
         for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
             self.assertIn(feature, overview)
-        for source in ("04-autoscalingrunnerset.yaml", "02-propagation-policies.yaml",
-                       "01-karmada-interpreter.yaml", "03-rbac.yaml"):
-            self.assertIn(source, overview)
-        self.assertIn("不属于当前核心需求", overview)
+        for concept in ("统一 Runner 服务与资源共享", "平台可控的跨集群放置",
+                        "跨控制面的 Runner 正常执行", "联邦临时资源的生命周期管理"):
+            self.assertIn(concept, overview)
+        for implementation_evidence in ("manifests/", "scripts/", ".github/", ".yaml",
+                                        "当前仓库的依据", "实现状态边界"):
+            self.assertNotIn(implementation_evidence, overview)
+        self.assertIn("统一入口 → 成员选择 → 跨集群执行与状态反馈 → 资源回收", overview)
         self.assertIn("**扩展候选：原 SR-06-01，当前非正式 SR**", self.design)
 
     def test_six_column_implementation_interface_tables(self):
