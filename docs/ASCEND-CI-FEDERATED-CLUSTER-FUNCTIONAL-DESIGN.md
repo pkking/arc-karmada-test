@@ -147,13 +147,28 @@
 
 ## 3.2 备选方案与最终选型
 
-| 选型 | 结构 | 优点 | 主要代价与适用边界 |
+| 选型 | 方案结构 | 主要优点 | 主要限制 |
 |---|---|---|---|
-| A：每成员独立 ARC | 每个集群有独立 Scale Set/Controller | 实施与故障域较独立 | 统一入口、跨资源池共享需要额外协调层；与“集中 Runner 生命周期”目标不完全一致 |
-| B：ARC + Liqo | ARC 结合跨集群资源/网络抽象 | 某些网络和工作负载场景可复用 Liqo 能力 | 跨集群网络、资源抽象和运维依赖需独立设计；当前仓库不是该方案实现 |
-| **C：ARC + Karmada（选择）** | ARC 管理期望量，Karmada 分发 Runner Pod | 复用 Karmada Policy、成员集群与执行面调度边界 | ARC 的控制面访问、状态回传、JIT 依赖、资源回收需要本项目显式约束 |
+| A：每个成员集群独立部署 ARC | 每个成员集群部署自己的 ARC Controller 和 Runner Scale Set。多个集群可对外提供相同 Runner 服务名称，但同名 Scale Set 必须位于不同 Runner Group。 | 各集群可以独立管理 Runner 的创建和回收，控制器故障主要影响所在集群。 | **GitHub Actions 服务决定作业分配给哪个 Runner Scale Set，平台不能配置跨 Scale Set 的作业分配算法。** 当多个同名 Scale Set 同时在线时，GitHub 官方将这种分配方式描述为不可配置的 `assignment race`。因此，平台不能直接按成员集群的剩余容量、NPU 类型、地域或优先级制定统一的跨集群调度策略。 |
+| B：ARC + Liqo | ARC 结合 Liqo 提供的跨集群资源和网络能力。 | 可以复用 Liqo 的跨集群网络及资源抽象能力。 | 必须独立设计跨集群网络、资源映射和控制面依赖。本仓库没有将该方案作为目标实现。 |
+| **C：ARC + Karmada（选定）** | 平台通过一个统一 Runner Scale Set 接收 GitHub 的任务需求。ARC 管理临时 Runner，Karmada 根据 PropagationPolicy 将 Runner Pod 分发到符合条件的成员集群。 | **成员集群的选择由平台维护的联邦策略控制**。平台能够规定候选成员、集群属性和资源约束，不需要依赖 GitHub 在多个独立 Scale Set 之间选择执行集群。 | 平台必须设计跨控制面的身份、JIT Secret 传播、Pod 状态反馈及临时资源回收。Karmada 的策略也不自动保证多个独立 Runner Pod 按固定比例分配。 |
 
-**方案选择依据（D）**：功能域主要是 Kubernetes 对象级跨集群分发，且不要求 Pod 间跨集群直连网络，因此以现有 Karmada 联邦能力承担成员选择和依赖传播。上述评价属于**本功能域的架构取舍**，不代表上游对 ARC+Karmada 组合做了兼容性认证。
+### 3.2.1 作业分配与成员集群调度的责任边界
+
+为了避免把两个不同的调度阶段混为一谈，本设计作如下区分：
+
+1. **GitHub Actions 负责作业与 Runner 服务匹配**。GitHub 根据工作流的 `runs-on`、Runner Group 和 Runner Scale Set 的注册信息决定向哪个 Scale Set 分配作业。采用方案 A 时，多个独立 Scale Set 之间的选择仍由 GitHub 服务完成，平台不能提供自定义的集群间作业分配算法。
+2. **ARC 负责 Scale Set 内的 Runner 数量和生命周期**。ARC Listener 接收 GitHub 分配给当前 Scale Set 的作业消息及数量信息，并更新 `EphemeralRunnerSet` 的期望数量。ARC 的 `minRunners` 和 `maxRunners` 用于限制或预置该 Scale Set 的 Runner 数量，**不是跨多个 Scale Set 的集群调度策略**。
+3. **Karmada 负责选定 Runner Pod 的执行成员**。采用方案 C 时，ARC 为统一 Runner Scale Set 创建 Runner Pod。Karmada 根据本系统配置的 `PropagationPolicy` 选择允许执行该 Pod 的成员集群。成员 Kubernetes 继续负责该集群内部的节点调度。平台能控制的是 **Runner Pod 的成员放置策略**，而不是 GitHub Actions 内部的 Job 分配算法。
+
+**选型结论（D）**：本功能域需要根据成员集群的资源条件控制 Runner 的执行位置。因此选择方案 C，将跨集群放置决策放在平台可管理的 Karmada 策略中。方案 A 虽然可以在多个集群独立提供 Runner 服务，但当多个 Scale Set 都有资格接收同一种任务时，平台不能直接控制 GitHub 将具体作业分配给哪一个 Scale Set。该差异是本次选型的主要依据，而不仅是方案 A 缺少集中管理。
+
+**上游依据**：
+
+- [GitHub 官方：部署 Runner Scale Sets — High availability and automatic failover](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets#high-availability-and-automatic-failover)：说明多个独立集群可以在不同 Runner Group 使用同名 Scale Set；多个 Scale Set 同时在线时，分配可能由竞争决定，且不能配置作业分配算法。
+- [GitHub 官方：ARC 工作原理](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)：说明 GitHub Actions 服务进行作业匹配，ARC Listener 接收 `Job Available` 消息后按需求调整 Runner 数量。
+- [ARC 源码：`cmd/ghalistener/scaler/scaler.go`](https://github.com/actions/actions-runner-controller/blob/master/cmd/ghalistener/scaler/scaler.go)：`Scale` 处理收到的作业消息与 `TotalAssignedJobs`，后续更新当前 `EphemeralRunnerSet` 的目标 Runner 数量。这里没有跨独立 Scale Set 的成员选择算法。
+- [Karmada 官方：PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)：说明通过传播策略选择成员集群。本方案根据这些机制制定跨集群 Runner Pod 放置规则，**不把 ARC 与 Karmada 的组合描述成上游已认证的整体方案**。
 
 ## 3.3 端到端实现思路
 
