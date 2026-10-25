@@ -98,15 +98,9 @@
 
 **用例视图（概要）：**
 
-```mermaid
-flowchart LR
-  Dev[CI 开发者] --> UC01((统一标签提交))
-  Operator[平台工程师] --> UC03((按需供给与回收))
-  Operator --> UC05((联邦调度与 JIT 分发))
-  Admin[资源池管理员] --> UC07((NPU 执行能力))
-  Security[安全管理员] --> UC08((Listener 身份治理))
-  Platform[平台运维] --> UC09((状态与故障闭环))
-```
+![昇腾CI 联邦集群功能域概要用例视图——业务角色与主要用例关系](images/federated-cluster-use-case-overview.svg)
+
+> 图中连线仅表示参与者与主要业务用例的关联，不代表任务执行时序。Runner 弹性供给、JIT Secret 传播、Pod 状态聚合等属于支撑业务用例的内部实现功能，详见第 5 章。
 
 ## 2.4 系统功能需求 SR
 
