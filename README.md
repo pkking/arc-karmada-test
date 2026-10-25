@@ -6,7 +6,9 @@
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
 
-系统目标、Before / After、逻辑/部署架构及 US-01～US-08 的设计见[《ARC + Karmada 联邦调度执行子系统设计说明书》](docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md)。**设计文档仅以 ARC/Karmada/Kubernetes/GitHub Actions 的官方组件文档和集成决策为依据，不要求 PoC 或运行证据**；请参见[官方依据矩阵](docs/UPSTREAM-SOURCE-MATRIX.md)、[接口与资源设计契约](docs/IMPLEMENTATION-CONTRACT.md)、[设计评审与完成准则](docs/ACCEPTANCE-CONTRACT.md)和[Agent 工作规范](AGENTS.md)。本 README 是独立的 PoC/实现操作指南，若需工程 E2E 测试另见[工程测试计划](docs/ENGINEERING-TEST-PLAN.md)、[安全审查](docs/SECURITY-REVIEW.md)和[重建记录](docs/REBUILD-VALIDATION.md)；这些并非设计审核条件。
+**唯一的正式功能设计文档：**[《昇腾CI 联邦集群功能设计文档》](docs/ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md)。它按统一模板组织：第 1 章背景与目的、第 2 章功能域概述、第 3 章总体方案、第 4 章规格变更与设计、第 5 章功能实现设计（6 个功能、8 个原始 Story、接口和 FMEA）。上游 ARC/Karmada/Kubernetes 官方依据和本项目的接口、资源、状态、安全、异常及 NPU 约束均在这**一份**正文内维护。**完成功能设计不要求 PoC、真实 Runner、Kind 或硬件运行证据。** [AGENTS.md](AGENTS.md)规定后续 Agent 如何更新设计。
+
+本 README 为独立工程部署与复现指南；[工程测试计划](docs/ENGINEERING-TEST-PLAN.md)、[历史重建记录](docs/REBUILD-VALIDATION.md)以及各类 Manifest 是实施资产，不是额外的正式设计文档，也不构成设计评审前置条件。
 
 ---
 
