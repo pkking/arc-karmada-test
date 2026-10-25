@@ -41,6 +41,25 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertIn(sr, self.design)
         self.assertEqual(self.design.count("sequenceDiagram"), 10)
 
+    def test_system_requirements_are_scenario_based_and_include_dfx(self):
+        section = self.design.split("## 2.4 系统需求 SR", 1)[1].split("\n## 2.5 ", 1)[0]
+        functional = section.split("### 2.4.1 功能需求", 1)[1].split("### 2.4.2 非功能需求", 1)[0]
+        nonfunctional = section.split("### 2.4.2 非功能需求", 1)[1].split("### 2.4.3 ", 1)[0]
+        function_ids = re.findall(r"(?m)^\\| \\*\\*(SR-\\d\\d-\\d\\d)\\*\\* \\|", functional)
+        nfr_ids = re.findall(r"(?m)^\\| \\*\\*(SR-NF-\\d\\d)\\*\\* \\|", nonfunctional)
+        self.assertEqual(len(function_ids), 9)
+        self.assertEqual(len(nfr_ids), 9)
+        for requirement in ("安全性", "可靠性", "可服务性", "性能与容量",
+                            "成本与资源利用", "兼容性", "可维护性", "可用性"):
+            self.assertIn(requirement, nonfunctional)
+        for implementation_detail in ("PropagationPolicy", "EphemeralRunnerSet", "Pod.status",
+                                      "githubConfigSecret", "ResourceInterpreterCustomization"):
+            self.assertNotIn(implementation_detail, functional)
+        for n in range(1, 10):
+            self.assertIn(f"SR-NF-{n:02d}", self.design.split("### 5.7.1 ", 1)[1])
+        self.assertIn("量化阈值待定", nonfunctional.replace("阈值待定", "量化阈值待定"))
+        self.assertIn("P-SR-04", section)
+
     def test_six_column_implementation_interface_tables(self):
         for n in range(1, 7):
             head = f"#### 5.{n}.6.1 接口设计"
