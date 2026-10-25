@@ -47,18 +47,41 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         nonfunctional = section.split("### 2.4.2 非功能需求", 1)[1].split("### 2.4.3 ", 1)[0]
         function_ids = re.findall(r"(?m)^\| \*\*(SR-\d\d-\d\d)\*\* \|", functional)
         nfr_ids = re.findall(r"(?m)^\| \*\*(SR-NF-\d\d)\*\* \|", nonfunctional)
-        self.assertEqual(len(function_ids), 9)
-        self.assertEqual(len(nfr_ids), 9)
-        for requirement in ("安全性", "可靠性", "可服务性", "性能与容量",
-                            "成本与资源利用", "兼容性", "可维护性", "可用性"):
+        self.assertEqual(function_ids, [
+            "SR-01-01", "SR-02-01", "SR-03-01", "SR-03-02",
+            "SR-04-01", "SR-05-01", "SR-02-02"
+        ])
+        self.assertEqual(nfr_ids, [
+            "SR-NF-01", "SR-NF-02", "SR-NF-03", "SR-NF-04",
+            "SR-NF-05", "SR-NF-06", "SR-NF-08"
+        ])
+        for requirement in ("跨控制面访问安全", "跨成员凭证隔离", "成员故障边界",
+                            "跨集群问题定位", "容量与排队性能", "资源使用与成本",
+                            "放置策略可维护性"):
             self.assertIn(requirement, nonfunctional)
         for implementation_detail in ("PropagationPolicy", "EphemeralRunnerSet", "Pod.status",
                                       "githubConfigSecret", "ResourceInterpreterCustomization"):
             self.assertNotIn(implementation_detail, functional)
-        for n in range(1, 10):
-            self.assertIn(f"SR-NF-{n:02d}", self.design.split("### 5.7.1 ", 1)[1])
-        self.assertIn("量化阈值待定", nonfunctional.replace("阈值待定", "量化阈值待定"))
+        for code in nfr_ids:
+            self.assertIn(code, self.design.split("### 5.7.1 ", 1)[1])
+        self.assertNotIn("| **SR-06-01** |", functional)
+        self.assertNotIn("| **SR-01-02** |", functional)
+        self.assertNotIn("| **SR-NF-07** |", nonfunctional)
+        self.assertNotIn("| **SR-NF-09** |", nonfunctional)
+        self.assertIn("未确定", section)
         self.assertIn("P-SR-04", section)
+        for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
+            self.assertIn(feature, self.design)
+
+    def test_federated_features_have_code_traceability(self):
+        overview = self.design.split("## 2.2 本功能域的系统特性", 1)[1].split("## 2.3 ", 1)[0]
+        for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
+            self.assertIn(feature, overview)
+        for source in ("04-autoscalingrunnerset.yaml", "02-propagation-policies.yaml",
+                       "01-karmada-interpreter.yaml", "03-rbac.yaml"):
+            self.assertIn(source, overview)
+        self.assertIn("不属于当前核心需求", overview)
+        self.assertIn("**扩展候选：原 SR-06-01，当前非正式 SR**", self.design)
 
     def test_six_column_implementation_interface_tables(self):
         for n in range(1, 7):
