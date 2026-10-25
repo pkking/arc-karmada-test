@@ -97,7 +97,8 @@ class ContractStaticTests(unittest.TestCase):
         self.assertIn('create token "${SA_NAME}" --duration="${TOKEN_DURATION}"', script)
         self.assertIn("secret generic karmada-token", script)
         design = read("docs/ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md")
-        self.assertIn("轮换后重新加载行为必须明确", design)
+        self.assertIn("平台必须规定 Listener 如何加载更新后的令牌或证书", design)
+        self.assertIn("仅修改 Kubernetes Secret 不能证明 Listener 一定会自动使用新凭证", design)
 
     def test_real_runner_jobs_are_manual_only(self):
         workflow = read(".github/workflows/test-arc.yml")
