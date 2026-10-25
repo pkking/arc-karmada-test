@@ -1,6 +1,6 @@
 # 原设计说明书 — 已合并
 
-正式设计已统一为 [**《昇腾CI 联邦集群功能设计文档》](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md)**。本文件保留旧链接入口，不再维护第二份架构/Story 正文。
+正式设计已统一为 **[《昇腾CI 联邦集群功能设计文档》](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md)**。本文件保留旧链接入口，不再维护第二份架构/Story 正文。
 
 新文档第 1 章是背景与职责；第 2 章概述及 IR/UC/SR；第 3 章总体方案与逻辑/部署架构；第 4 章规格；第 5 章六个功能实现设计、10 幅用例时序图和 FMEA。
 
