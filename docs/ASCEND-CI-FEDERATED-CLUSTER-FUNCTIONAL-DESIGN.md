@@ -104,19 +104,27 @@
 
 ## 2.4 系统功能需求 SR
 
-| SR | 开发应实现的可观察行为 | 实现单元 | 用例 | 来源类型 |
-|---|---|---|---|---|
-| SR-01-01 | 统一 Runner 标签到 Scale Set 映射，业务工作流无需指定成员 | F-01 | UC-01 | U:ARC-1,ARC-2 |
-| SR-01-02 | 无匹配 Scale Set 或认证异常时保持可观察错误或排队状态，不静默错误路由 | F-01 | UC-02 | D |
-| SR-02-01 | 按任务需求通过 ARC 官方 CR 管理临时 Runner 实例和 Job 注册 | F-02 | UC-03 | U:ARC-1 |
-| SR-02-02 | 执行结束后依据上游 Owner/Finalizer 回收临时 Runner、JIT 及联邦副本 | F-02 | UC-04 | D:ARC+Karmada |
-| SR-03-01 | 将 Runner Pod 分发至符合 ClusterAffinity/资源约束的一个成员，不保证独立 Pod 逐轮均衡 | F-03 | UC-05 | U:KAR-1 |
-| SR-03-02 | 将 Runner 引用的 JIT Secret 与 Pod 下发同一成员，并容忍异步晚到 | F-03 | UC-06 | U:KAR-2；D:依赖链 |
-| SR-04-01 | Listener 使用控制面 endpoint、CA、受限身份操作 ERS；区分认证/授权/网络异常 | F-04 | UC-08 | U:K8S-1,K8S-2；D |
-| SR-05-01 | 对单目标 Runner Pod 聚合完整 status，保留 containerStatuses 名称和 Ready Conditions | F-05 | UC-09 | U:KAR-3；D |
-| SR-06-01 | NPU Runner 通过 Kubernetes Device Plugin 的扩展资源与节点约束分配到兼容成员 | F-06 | UC-07 | U:K8S-3；P:型号/资源名 |
+本节规定昇腾CI联邦集群功能域必须提供的功能。每条需求说明**在什么条件下，由哪个组件完成什么操作，以及出现异常时如何处理**。具体资源字段、访问权限和交互时序分别见第 4 章和第 5 章。本节不规定未经确认的响应时间、资源数量或性能指标。
 
-**功能变更判断**：U 类优先复用官方机制；D 类是本项目的配置、身份、资源、状态适配；P 类需在实施配置/设备选型时落实。接口和异常规格集中在第 4 章定义；第 5 章对每个功能只描述该功能必须编写/声明的对象、调用与运行路径。
+需求使用明确的动作词，例如“设置”“创建”“传播”“读取”“拒绝”，不使用“打通”“赋能”“闭环”“容忍”等含义不确定的词。一个名称只表示一种对象；同一对象在全文中使用同一个名称。写法参考 [ASD-STE100 受控技术英语](https://www.asd-ste100.org/about_STE.html)的术语一致、简明句式和减少歧义原则。ASD-STE100 是英语写作标准，本节是对这些原则的**中文技术需求写作应用**，不是 ASD-STE100 符合性声明。
+
+**术语约定**：Runner 指执行 GitHub Actions 作业的执行器；Runner 服务指通过 Runner Scale Set 向 GitHub 提供的一组可自动增减的 Runner；成员集群指由 Karmada 管理并实际运行 Runner Pod 的 Kubernetes 集群；JIT Secret 指保存 Runner 临时注册配置的 Kubernetes Secret。首次引用 Kubernetes 资源时，保留其官方英文资源名，以便开发人员查找对应的 API 文档。
+
+| 需求编号 | 功能需求（规定的行为） | 适用条件及异常处理 | 负责功能与用例 | 设计依据 |
+|---|---|---|---|---|
+| **SR-01-01** | 平台必须为每个对外提供的 Runner 服务设置一个固定名称，并将该名称配置为 `AutoscalingRunnerSet.spec.runnerScaleSetName`。CI 开发者通过 GitHub Actions 工作流中的 `runs-on` 指定该名称。开发者不需要在工作流中填写成员集群名称或地址。 | 同一 Runner 服务的工作流标签与 Scale Set 名称必须一致。Runner 服务的目标 GitHub 仓库或组织由平台配置，不能由成员集群自行更改。 | F-01，UC-01 | ARC-1、ARC-2；SP-01 |
+| **SR-01-02** | 当工作流指定的 `runs-on` 名称没有对应的 Runner 服务时，平台不得修改工作流中的名称，也不得将该作业交给名称不同的 Runner 服务。 | GitHub Actions 负责该作业的排队及运行状态。平台管理员应通过 GitHub Actions 的作业信息和 Runner 服务配置排查名称不匹配问题。认证失败由 SR-04-01 规定，不属于标签不匹配。 | F-01，UC-02 | ARC-1；本系统的服务隔离约束 |
+| **SR-02-01** | 当 ARC Listener 收到 GitHub Actions 的 Runner 数量需求时，ARC 必须按照 Runner Scale Set 的配置调整临时 Runner 的数量。ARC 使用其管理的 `EphemeralRunnerSet`、`EphemeralRunner` 和 Runner Pod 创建执行器，并使用临时注册配置向 GitHub 注册 Runner。 | Runner 数量不得超过所配置的 `maxRunners`。如果没有可用的执行资源，作业由 GitHub Actions 保持相应的排队状态；本功能域不得绕过 Runner 服务的容量限制。 | F-02，UC-03 | ARC-1；SP-01 |
+| **SR-02-02** | 当作业结束并进入 ARC 规定的 Runner 删除流程时，ARC 必须按照其资源所有权规则删除临时 Runner 对象。Karmada 必须按照其资源传播和删除机制处理对应的 Runner Pod、临时注册凭证及成员集群中的资源副本。 | 删除由不同控制器分别处理，不要求所有对象在同一时刻消失。如果资源因 `finalizer` 而不能删除，平台必须保留对象状态和错误信息，不得直接删除未知控制器设置的 `finalizer`。 | F-02，UC-04 | ARC-1、KAR-1；SP-07 |
+| **SR-03-01** | 对于 ARC 创建的每个临时 Runner Pod，Karmada 必须根据传播策略中规定的候选成员和资源约束选择执行集群。本方案规定，一个 Runner Pod 只在一个成员集群执行。成员集群的 Kubernetes 调度器负责在该集群内选择运行节点。 | 当没有满足条件的成员集群时，系统必须保留 Runner Pod 的未就绪或不可调度状态，并提供调度失败原因。传播策略不保证多个独立 Runner Pod 在每轮任务中平均分配到各成员集群。 | F-03，UC-05 | KAR-1；SP-02、SP-03 |
+| **SR-03-02** | 当 Karmada 将 Runner Pod 分发到指定成员集群时，必须将该 Pod 引用的 JIT Secret 分发到同一成员集群。Runner Pod 只有在所需的 Secret 可以被 Kubernetes 正常使用后，才能进入依赖该凭证的启动流程。 | Runner Pod 和 JIT Secret 可以先后到达。Secret 尚未到达时，平台不得把该 Runner 判定为可以执行作业；Karmada 和成员 Kubernetes 按各自的资源同步及 Pod 启动机制继续处理。 | F-03，UC-06 | KAR-2；SP-03、SP-04 |
+| **SR-04-01** | ARC Listener 访问 Karmada API 时，必须使用目标 API 的地址、可信任的 CA 证书和授予该 Listener 所需权限的访问凭证。Listener 必须校验服务器的 TLS 证书。访问权限必须限定为更新指定 Runner 服务所需的 Kubernetes API 资源和操作。 | 当连接失败、证书校验失败、身份认证失败或权限检查失败时，系统必须分别记录错误类型。不得通过关闭 TLS 校验、改用成员集群的默认身份或授予管理员权限来绕过这些错误。凭证更新和重新加载的责任由平台身份管理设计规定。 | F-04，UC-08 | K8S-1、K8S-2；SP-04、SP-05 |
+| **SR-05-01** | 当成员集群更新 Runner Pod 的运行状态时，Karmada 必须将该 Pod 的状态传回联邦控制面。本系统的状态解释规则必须保留 ARC 判断 Runner 状态所需的字段，包括容器名称、容器运行状态和 Pod 的 Ready 条件。 | 本方案只定义 Runner Pod 在一个成员集群执行时的状态处理规则。当状态尚未返回时，不得自行生成 Ready 状态。如果同一 Pod 出现多个成员的状态信息，不能在没有明确规则的情况下选择其中一个作为最终状态。 | F-05，UC-09 | KAR-3；SP-06 |
+| **SR-06-01** | 对于要求使用 NPU 的 Runner 服务，平台必须在 Runner Pod 中声明对应设备插件提供的 Kubernetes 扩展资源名称和资源数量。Karmada 必须将该 Pod 分发到符合所选 NPU 资源要求的成员集群；成员 Kubernetes 负责在具有相应设备资源的节点上调度 Pod。 | 扩展资源名称、数量单位、设备驱动、容器运行环境和兼容性条件由目标 NPU 产品规格确定。没有符合要求的设备时，Pod 必须保持不可调度状态；平台不得删除 NPU 资源请求，也不得改用不具备所需设备的节点执行作业。 | F-06，UC-07 | K8S-3、KAR-1；SP-08 |
+
+**需求边界**：上述条目规定的是系统应当具备的功能和限制，不表示这些要求已经由当前仓库的全部配置实现。特别是 Runner Pod 选择范围、GitHub 主凭证传播和 Listener 身份管理，当前配置与目标设计之间的差异已在第 4.1 节列出。
+
+**需求来源与实现关系**：ARC、Karmada 和 Kubernetes 的既有功能优先复用官方接口。跨组件的资源关系、身份约束和异常处理属于本系统的设计要求。每个需求在第 5 章对应一个负责功能及相关用例；实际部署所需的 NPU 资源名称、证书参数及容量指标，由部署和产品选型提供。
 
 ## 2.5 非目标、约束及使用体验
 
