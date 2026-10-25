@@ -1,11 +1,11 @@
 # 工程实施阶段测试计划（非设计文档完成前提）
 
 > 本文件归档此前 T0 / T1 / T2 / T3 的实施测试口径。它仅适用于实际部署、集成验证、性能测试和生产验收；**写完或评审 ARC + Karmada 设计文档不需要执行这些测试，也不需要 PoC、Kind、GitHub PAT 或实际 Runner。**
-> 设计完成的要求请使用 [设计评审准则](ACCEPTANCE-CONTRACT.md) 和 [官方组件依据矩阵](UPSTREAM-SOURCE-MATRIX.md)。下文历史 Run 只能说明历史环境，不能作为官方能力规范。
+> 设计完成的要求请使用 [设计评审准则](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md) 和 [官方组件依据矩阵](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md#37-上游官方资料及推导边界)。下文历史 Run 只能说明历史环境，不能作为官方能力规范。
 
 # 历史 PoC 的 Story 运行测试与证据归档
 
-> 基线：2026-10-15 PoC；目标是可验证的行为等价，不是生产 SLA。对应[设计文档](KARMADA-ARC-SUBSYSTEM-DESIGN.md)、[实现契约](IMPLEMENTATION-CONTRACT.md)和 [Issue #1](https://github.com/pkking/arc-karmada-test/issues/1)。
+> 基线：2026-10-15 PoC；目标是可验证的行为等价，不是生产 SLA。对应[设计文档](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md)、[实现契约](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md#4-功能域规格变更与设计)和 [Issue #1](https://github.com/pkking/arc-karmada-test/issues/1)。
 
 ## 1. 验收分级与结果语义
 
@@ -42,7 +42,7 @@
 | **US-07** 任务清理 | 按本轮 Runner UID/名称盘点控制面和成员 Pod/ER/JIT，及关联 Binding/Work，无本轮残留；遗留 ERS Finalizer 独立保留 | ARC/Karmada 官方生命周期、[验证工具](../scripts/verify-arc.py) | [最终状态](evidence/arc-0.15.0-final-state.json)、[运行验证](arc-0.15.0-validation.md) | T1 已验证本轮；非全环境零残留 |
 | **US-08** NPU | NPU 节点/Device Plugin/Runner Pod 资源请求匹配，真实 GitHub NPU Job 成功，资源释放 | **目前没有完成的 NPU Runner 实现**；目标依赖成员 K8s/设备插件 | 无本仓库 NPU E2E 证据 | **待验证，不参与 P0 通过率** |
 
-上述每个 Story 的输入、异常分支及恢复责任详见[第 4 章](KARMADA-ARC-SUBSYSTEM-DESIGN.md#4-story-设计)和[实现契约第 7 节](IMPLEMENTATION-CONTRACT.md#7-异步故障和恢复契约)。
+上述每个 Story 的输入、异常分支及恢复责任详见[第 4 章](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md#5-功能实现设计)和[实现契约第 7 节](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md#45-sp-06sp-07-状态与生命周期规格设计)。
 
 ## 4. T0 静态 / T1 功能 / T2 定向执行入口
 
