@@ -43,8 +43,8 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
 
     def test_system_requirements_are_scenario_based_and_include_dfx(self):
         section = self.design.split("## 2.4 系统需求 SR", 1)[1].split("\n## 2.5 ", 1)[0]
-        functional = section.split("### 2.4.1 功能需求", 1)[1].split("### 2.4.2 非功能需求", 1)[0]
-        nonfunctional = section.split("### 2.4.2 非功能需求", 1)[1].split("### 2.4.3 ", 1)[0]
+        functional = section.split("### 2.4.1 ", 1)[1].split("### 2.4.2 ", 1)[0]
+        nonfunctional = section.split("### 2.4.2 ", 1)[1].split("### 2.4.3 ", 1)[0]
         function_ids = re.findall(r"(?m)^\| \*\*(SR-\d\d-\d\d)\*\* \|", functional)
         nfr_ids = re.findall(r"(?m)^\| \*\*(SR-NF-\d\d)\*\* \|", nonfunctional)
         self.assertEqual(function_ids, [
