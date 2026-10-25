@@ -96,8 +96,8 @@ class ContractStaticTests(unittest.TestCase):
         self.assertIn('TOKEN_DURATION="${TOKEN_DURATION:-24h}"', script)
         self.assertIn('create token "${SA_NAME}" --duration="${TOKEN_DURATION}"', script)
         self.assertIn("secret generic karmada-token", script)
-        contract = read("docs/IMPLEMENTATION-CONTRACT.md")
-        self.assertIn("无自动轮换", contract)
+        design = read("docs/ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md")
+        self.assertIn("轮换后重新加载行为必须明确", design)
 
     def test_real_runner_jobs_are_manual_only(self):
         workflow = read(".github/workflows/test-arc.yml")
@@ -119,16 +119,14 @@ class ContractStaticTests(unittest.TestCase):
         self.assertIn("--from-file=github_token=", readme)
         self.assertNotIn("--from-literal=github_token=", readme)
 
-    def test_story_coverage_and_unverified_npu_are_documented(self):
-        matrix = read("docs/ACCEPTANCE-CONTRACT.md")
+    def test_stories_and_npu_design_in_single_official_document(self):
+        design = read("docs/ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md")
         for i in range(1, 9):
-            self.assertIn(f"US-{i:02d}", matrix)
-        self.assertIn("T1", matrix)
-        self.assertIn("T2", matrix)
-        self.assertIn("T3", matrix)
-        self.assertIn("US-08", matrix)
-        self.assertIn("待验证", matrix)
-        self.assertIn("IMPLEMENTATION-CONTRACT.md", read("docs/KARMADA-ARC-SUBSYSTEM-DESIGN.md"))
+            self.assertIn(f"US-{i:02d}", design)
+        self.assertIn("SR-06-01", design)
+        self.assertIn("K8S-3", design)
+        self.assertIn("文档完成不要求 PoC", design)
+        self.assertIn("ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md", read("AGENTS.md"))
 
 
 if __name__ == "__main__":
