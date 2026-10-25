@@ -469,8 +469,8 @@ sequenceDiagram
 
 | 调用方 → 提供方 | 原生接口/对象 | 关键字段与输入输出 | 身份或前置条件 | 异常/幂等及诊断 | 依据/决策 |
 |---|---|---|---|---|---|
-| 外部 GitHub workflow → Scale Set / GitHub Actions runs-on / string 标签到服务名映射 / Repo/Org 权限和 Runner Service 名称一致 / 未匹配 → GitHub queued；不偷换成员标签 / U:ARC-1; D:SP-01 |
-| 平台配置 → ARC Controller / actions.github.com/v1alpha1 AutoscalingRunnerSet（声明式） / metadata.name/ns, spec.runnerScaleSetName, githubConfigUrl, githubConfigSecret, minRunners, maxRunners, template / Karmada API CRD 权限；GitHub 主凭证保管在可信管理域 / 版本/权限/配额异常可观测；禁用隐式扩权 / U:ARC-2; D |
+| 外部 GitHub workflow → Scale Set | GitHub Actions runs-on | string 标签到服务名映射 | Repo/Org 权限和 Runner Service 名称一致 | 未匹配 → GitHub queued；不偷换成员标签 | U:ARC-1; D:SP-01 |
+| 平台配置 → ARC Controller | actions.github.com/v1alpha1 AutoscalingRunnerSet（声明式） | metadata.name/ns, spec.runnerScaleSetName, githubConfigUrl, githubConfigSecret, minRunners, maxRunners, template | Karmada API CRD 权限；GitHub 主凭证保管在可信管理域 | 版本/权限/配额异常可观测；禁用隐式扩权 | U:ARC-2; D |
 
 **开发交付边界**：只新增/修改本仓库负责的 RunnerSet 模板、PropagationPolicy、RBAC、身份适配、Lua/状态解释或资源参数；对官方 API 的精确字段类型、枚举和版本兼容限制，必须以所选版本的 CRD OpenAPI Schema 为准。上表不能替代完整 upstream schema。
 
@@ -587,9 +587,9 @@ sequenceDiagram
 
 | 调用方 → 提供方 | 原生接口/对象 | 关键字段与输入输出 | 身份或前置条件 | 异常/幂等及诊断 | 依据/决策 |
 |---|---|---|---|---|---|
-| Listener → ERS / Kubernetes API PATCH: actions.github.com/v1alpha1 EphemeralRunnerSet / 对指定 Scale Set 的期望副本调整；对象 UID/RV、资源名动态 / 独立 Listener SA / 指定 ERS patch / 冲突更新遵循 resourceVersion；拒绝越权或重复写错 ERS / U:ARC-1; D:SP-01 |
-| ARC Controller → Karmada API / EphemeralRunner、Runner Pod、临时 JIT Secret / Pod 模板含镜像、SA、JIT Secret 引用；临时 ER 动态生成 / Controller 最小 Karmada API 权限 / 资源未创建/镜像不可用保留事件与诊断 / U:ARC-1; D |
-| ARC / Karmada → 成员 K8s / Pod 删除；ResourceBinding/Work 生命周期 / 关联 UID/owner、已选成员及临时 Secret / 分层的 Owner/Finalizer / 异步删除、Finalizer 阻塞独立处理，不强清 / U:ARC-1,KAR-1; D:SP-07 |
+| Listener → ERS | Kubernetes API PATCH: actions.github.com/v1alpha1 EphemeralRunnerSet | 对指定 Scale Set 的期望副本调整；对象 UID/RV、资源名动态 | 独立 Listener SA，指定 ERS patch | 冲突更新遵循 resourceVersion；拒绝越权或重复写错 ERS | U:ARC-1; D:SP-01 |
+| ARC Controller → Karmada API | EphemeralRunner、Runner Pod、临时 JIT Secret | Pod 模板含镜像、SA、JIT Secret 引用；临时 ER 动态生成 | Controller 最小 Karmada API 权限 | 资源未创建/镜像不可用保留事件与诊断 | U:ARC-1; D |
+| ARC/Karmada → 成员 K8s | Pod 删除；ResourceBinding/Work 生命周期 | 关联 UID/owner、已选成员及临时 Secret | 分层的 Owner/Finalizer | 异步删除、Finalizer 阻塞独立处理，不强清 | U:ARC-1,KAR-1; D:SP-07 |
 
 **开发交付边界**：只新增/修改本仓库负责的 RunnerSet 模板、PropagationPolicy、RBAC、身份适配、Lua/状态解释或资源参数；对官方 API 的精确字段类型、枚举和版本兼容限制，必须以所选版本的 CRD OpenAPI Schema 为准。上表不能替代完整 upstream schema。
 
@@ -736,9 +736,9 @@ sequenceDiagram
 
 | 调用方 → 提供方 | 原生接口/对象 | 关键字段与输入输出 | 身份或前置条件 | 异常/幂等及诊断 | 依据/决策 |
 |---|---|---|---|---|---|
-| ARC → Karmada API / v1/Pod、v1/Secret、v1/ServiceAccount / Runner Pod 标签、Namespace、SA、SecretKeyRef；JIT 动态 Secret / 控制面 CR 访问授权 / 资源丢失、JIT 未到可观测，不重试 GitHub 任务 / U:ARC-1; D |
-| 平台 → Karmada Scheduler/Controller / policy.karmada.io/v1alpha1 PropagationPolicy / resourceSelectors、clusterAffinity、propagateDeps、replicaScheduling / policy 管理角色，命名空间隔离 / 无匹配/候选集为空 → 留置与调度事件 / U:KAR-1,KAR-2; D:SP-02,SP-03 |
-| Karmada → 成员 / ResourceBinding / Work（上游动态资源） / 成员目标、Pod/引用 Secret/SA、同步状态 / 联邦成员访问身份 / 成员不可达/冲突遵循 Karmada 官方 reconcile / U:KAR-1,KAR-2; D |
+| ARC → Karmada API | v1/Pod、v1/Secret、v1/ServiceAccount | Runner Pod 标签、Namespace、SA、SecretKeyRef；JIT 动态 Secret | 控制面 CR 访问授权 | 资源丢失、JIT 未到可观测，不重试 GitHub 任务 | U:ARC-1; D |
+| 平台 → Karmada Scheduler/Controller | policy.karmada.io/v1alpha1 PropagationPolicy | resourceSelectors、clusterAffinity、propagateDeps、replicaScheduling | policy 管理角色，命名空间隔离 | 无匹配/候选集为空 → 留置与调度事件 | U:KAR-1,KAR-2; D:SP-02,SP-03 |
+| Karmada → 成员 | ResourceBinding/Work（上游动态资源） | 成员目标、Pod/引用 Secret/SA、同步状态 | 联邦成员访问身份 | 成员不可达/冲突遵循 Karmada 官方 reconcile | U:KAR-1,KAR-2; D |
 
 **开发交付边界**：只新增/修改本仓库负责的 RunnerSet 模板、PropagationPolicy、RBAC、身份适配、Lua/状态解释或资源参数；对官方 API 的精确字段类型、枚举和版本兼容限制，必须以所选版本的 CRD OpenAPI Schema 为准。上表不能替代完整 upstream schema。
 
@@ -822,9 +822,9 @@ sequenceDiagram
 
 | 调用方 → 提供方 | 原生接口/对象 | 关键字段与输入输出 | 身份或前置条件 | 异常/幂等及诊断 | 依据/决策 |
 |---|---|---|---|---|---|
-| Listener → Karmada API / HTTPS Kubernetes API / EphemeralRunnerSet / host/port/SNI、CA、bearer token、resourceNames=Scale Set / TokenRequest + 独立 SA / x509、401、403、超时独立分类 / U:K8S-1,K8S-2; D:SP-05 |
-| 部署/密钥面 → Listener Pod / listenerTemplate/Secret 或受控投射卷 / CA、Token/有效期、KUBERNETES_SERVICE_HOST/PORT 或 kubeconfig / Pod 只读最小挂载，禁止明文日志 / 轮换后重新加载行为必须明确，不假定自动生效 / D |
-| 安全管理员 → K8s RBAC / Role / RoleBinding / ephemeralrunnersets patch(限名)、ephemeralrunners get/patch、status patch / 跨 namespace subject 确认；禁止 cluster-admin / 角色漂移按差异检查纠正 / U:K8S-2; D |
+| Listener → Karmada API | HTTPS Kubernetes API（EphemeralRunnerSet） | host/port/SNI、CA、bearer token、resourceNames=Scale Set | TokenRequest + 独立 SA | x509、401、403、超时独立分类 | U:K8S-1,K8S-2; D:SP-05 |
+| 部署/密钥面 → Listener Pod | listenerTemplate/Secret 或受控投射卷 | CA、Token/有效期、KUBERNETES_SERVICE_HOST/PORT 或 kubeconfig | Pod 只读最小挂载，禁止明文日志 | 轮换后重新加载行为必须明确，不假定自动生效 | D |
+| 安全管理员 → K8s RBAC | Role/RoleBinding | ephemeralrunnersets patch(限名)、ephemeralrunners get/patch、status patch | 跨 namespace subject 确认；禁止 cluster-admin | 角色漂移按差异检查纠正 | U:K8S-2; D |
 
 **开发交付边界**：只新增/修改本仓库负责的 RunnerSet 模板、PropagationPolicy、RBAC、身份适配、Lua/状态解释或资源参数；对官方 API 的精确字段类型、枚举和版本兼容限制，必须以所选版本的 CRD OpenAPI Schema 为准。上表不能替代完整 upstream schema。
 
@@ -903,9 +903,9 @@ sequenceDiagram
 
 | 调用方 → 提供方 | 原生接口/对象 | 关键字段与输入输出 | 身份或前置条件 | 异常/幂等及诊断 | 依据/决策 |
 |---|---|---|---|---|---|
-| 成员 kubelet → Karmada / v1 Pod.status / phase、conditions、containerStatuses[name,state,ready]、启动/结束原因 / 成员资源读取身份 / 状态缺失/滞后须可检测，不凭空生成字段 / U:Kubernetes, KAR-3 |
-| Karmada Interpreter → 控制面 Pod / config.karmada.io/v1alpha1 ResourceInterpreterCustomization / AggregateStatus / target apiVersion=v1 kind=Pod；statusItems → desiredObj.status / 本系统维护 Lua 规则，不改上游源码 / 空/多个 status 来源需按单目标前提处理 / U:KAR-3; D:SP-06 |
-| ARC → Pod.status / Kubernetes Pod get/watch / runner 容器名、Ready Conditions、状态/退出信息 / Controller 读取所需对象权限 / 缺字段保持未就绪并给出日志/事件 / U:ARC-1; D |
+| 成员 kubelet → Karmada | v1 Pod.status | phase、conditions、containerStatuses[name,state,ready]、启动/结束原因 | 成员资源读取身份 | 状态缺失/滞后须可检测，不凭空生成字段 | U:Kubernetes, KAR-3 |
+| Karmada Interpreter → 控制面 Pod | config.karmada.io/v1alpha1 ResourceInterpreterCustomization（AggregateStatus） | target apiVersion=v1 kind=Pod；statusItems → desiredObj.status | 本系统维护 Lua 规则，不改上游源码 | 空/多个 status 来源需按单目标前提处理 | U:KAR-3; D:SP-06 |
+| ARC → Pod.status | Kubernetes Pod get/watch | runner 容器名、Ready Conditions、状态/退出信息 | Controller 读取所需对象权限 | 缺字段保持未就绪并给出日志/事件 | U:ARC-1; D |
 
 **开发交付边界**：只新增/修改本仓库负责的 RunnerSet 模板、PropagationPolicy、RBAC、身份适配、Lua/状态解释或资源参数；对官方 API 的精确字段类型、枚举和版本兼容限制，必须以所选版本的 CRD OpenAPI Schema 为准。上表不能替代完整 upstream schema。
 
@@ -1009,9 +1009,9 @@ sequenceDiagram
 
 | 调用方 → 提供方 | 原生接口/对象 | 关键字段与输入输出 | 身份或前置条件 | 异常/幂等及诊断 | 依据/决策 |
 |---|---|---|---|---|---|
-| 用户 Workflow → NPU Scale Set / GitHub Actions runs-on / 服务标签表示清晰设备规格，不能与通用 CPU Runner 混用 / Repo/Org 授权 / 无匹配服务 → queued/错误明确 / U:ARC-1; D |
-| Runner Pod → 成员 Kubernetes / v1 Pod.spec.containers[].resources / requests/limits[厂商扩展资源名]、nodeSelector/affinity/tolerations / Pod SA 最小权限 / 资源不足 Pending，不静默丢弃 NPU 要求 / U:K8S-3; D:SP-08 |
-| Karmada → 成员候选集 / PropagationPolicy placement / 选择兼容 NPU 成员、集群标签与资源容量条件 / 平台策略管理权限 / 成员标签/资源不满足 → 不错误放置 / U:KAR-1; D |
+| 用户 Workflow → NPU Scale Set | GitHub Actions runs-on | 服务标签表示清晰设备规格，不能与通用 CPU Runner 混用 | Repo/Org 授权 | 无匹配服务 → queued/错误明确 | U:ARC-1; D |
+| Runner Pod → 成员 Kubernetes | v1 Pod.spec.containers[].resources | requests/limits[厂商扩展资源名]、nodeSelector/affinity/tolerations | Pod SA 最小权限 | 资源不足 Pending，不静默丢弃 NPU 要求 | U:K8S-3; D:SP-08 |
+| Karmada → 成员候选集 | PropagationPolicy placement | 选择兼容 NPU 成员、集群标签与资源容量条件 | 平台策略管理权限 | 成员标签/资源不满足 → 不错误放置 | U:KAR-1; D |
 
 **开发交付边界**：只新增/修改本仓库负责的 RunnerSet 模板、PropagationPolicy、RBAC、身份适配、Lua/状态解释或资源参数；对官方 API 的精确字段类型、枚举和版本兼容限制，必须以所选版本的 CRD OpenAPI Schema 为准。上表不能替代完整 upstream schema。
 
