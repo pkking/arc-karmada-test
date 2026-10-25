@@ -8,7 +8,7 @@
 - 可运行 Docker、Kind、kubectl、karmadactl 的 Linux 计算环境，以及足够的 CPU/内存和可访问官方镜像仓库的网络。
 - 用于 GitHub 自托管 Runner 注册/执行的授权凭证和目标测试仓库；凭证需从安全存储注入，禁止将其交给日志或 Git。
 - Controller 可访问 Karmada API；member1 Listener 通过 TLS SAN/CA/Token 访问控制面；两个成员 Runner 可通过各自网络访问 GitHub。
-- 本仓库所有 [Manifest](../manifests/) 和官方 ARC 0.15.0 CRD；固定版本/镜像 digest 见[实现契约](IMPLEMENTATION-CONTRACT.md)。
+- 本仓库所有 [Manifest](../manifests/) 和官方 ARC 0.15.0 CRD；固定版本/镜像 digest 见[实现契约](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md#4-功能域规格变更与设计)。
 
 ## 2. 前置检查（无副作用 / 部分只读）
 
@@ -90,7 +90,7 @@ python3 scripts/verify-arc.py --dispatch --coverage-mode require \
 - 资源初始化失败：保存工具版本、脱敏命令、阶段/退出码、Kubernetes Event 原因，但**不保存**含 Token 的环境变量、Secret.data 或 kubeconfig。
 - GitHub dispatch 超时：通过 gh 查询本轮 Run，不可直接重复派发。
 - 某轮三个 Job 成功但仅分布一个成员：T1 可通过，覆盖实验不足；T2 由定向运行证明。
-- 成员不可达、Pod Pending、JIT Secret 未到、Runner 注册失败、清理 Finalizer：按[实现契约](IMPLEMENTATION-CONTRACT.md#7-异步故障和恢复契约)区分职责。
+- 成员不可达、Pod Pending、JIT Secret 未到、Runner 注册失败、清理 Finalizer：按[实现契约](ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md#45-sp-06sp-07-状态与生命周期规格设计)区分职责。
 - 敏感信息不能提交仓库、PR 评论或公共日志。生成的证据报告仅存对象名/UID/RV、集群别名、诊断代码、Runner 实例名、GitHub Run 链接和已脱敏摘要。
 
 ## 6. 真正关闭 Issue #1 的证据门槛
