@@ -325,7 +325,7 @@ erDiagram
 
 # 4 功能域规格变更与设计
 
-> 本章规定多个功能共同使用的资源、配置及安全规则。第 5 章说明每个功能如何使用这些规则，不重复描述 ARC、Karmada 和 Kubernetes 的内部实现。**U** 表示上游文档支持的能力；**D** 表示本功能域确定的集成规则；**P** 表示部署时需要提供的参数。“当前配置”指本仓库已有的 Manifest，“目标设计”指开发必须满足的要求。两者不一致时，开发人员必须明确记录并处理差异。
+> 本章定义跨功能规则；实现见第 5 章。**U** 上游能力；**D** 本方案约束；**P** 部署参数。区分 Manifest 现状与目标，差异需处理。
 
 ## 4.1 功能域规格变更
 
@@ -341,13 +341,13 @@ erDiagram
 | SP-08 NPU 资源规格 | 当前示例没有固定 NPU 资源名称及设备插件。 | 部署方必须从目标设备插件取得扩展资源名称与分配规则。平台据此配置成员筛选和 Runner Pod 资源请求。 | 设备与资源池维护者 |
 | SP-09 安全与可观测性 | 现有资料通过 GitHub Run、Pod、Work 和日志进行局部诊断。 | 平台必须保存任务和联邦资源之间可追踪的标识，记录错误类型，禁止将凭证值写入日志。 | 平台运维与安全管理员 |
 
-**当前配置与目标的差异**：SP-03、SP-04、SP-05 需要改变现有集成配置。文档明确的是开发目标，不表示这些变化已经实施。设计完成不需要 PoC，但实施人员必须逐项处理目标规格与现有 Manifest 的差异。
+**待实施差异**：SP-03、SP-04、SP-05；目标不代表已实施。设计不以 PoC 为前提。
 
 ## 4.2 SP-01 Runner 服务与任务入口规格设计
 
 ### 4.2.1 实现思路
 
-GitHub Actions 通过工作流的 `runs-on` 字段匹配 Runner 服务。平台在 `AutoscalingRunnerSet.spec.runnerScaleSetName` 中配置该服务的名称。ARC 负责创建和删除 Runner（U）。本功能域负责维护工作流标签、Runner 服务、Runner 模板和候选成员之间的对应关系（D）。成员集群名称不应出现在一般业务工作流中。若两个资源池的硬件或权限不能互换，平台应分别定义 Runner 服务。
+工作流通过 `runs-on` 匹配 `AutoscalingRunnerSet.spec.runnerScaleSetName`。ARC 管理 Runner 生命周期（U）；平台维护服务、模板和候选成员的映射（D）。工作流无需成员名称；硬件或权限不兼容时，应分设服务。
 
 ### 4.2.2 实现设计
 
@@ -360,13 +360,13 @@ GitHub Actions 通过工作流的 `runs-on` 字段匹配 Runner 服务。平台�
 | Runner 镜像与 Pod 模板 | `spec.template` | `spec.template` 必须声明 Runner 镜像、资源请求、ServiceAccount 及必要的容器安全配置。 |
 | 版本约束 | ARC CRD/Controller/Listener/RunnerSet label | 部署方必须核对 ARC Controller、CRD 和 Runner 资源的版本兼容性。现有 0.15.0 只是配置示例。 |
 
-如果工作流标签没有对应的 Runner 服务，平台不得更改该标签或把作业发送给其他服务。GitHub Actions 根据自己的规则显示排队状态。当注册权限不足或 Runner 已达到容量上限时，平台必须保留对应的错误信息或容量状态，不得通过更换服务标签绕过隔离要求。
+标签无匹配时，不得替换服务；排队由 GitHub 处理。权限不足或容量已满时，保留错误及容量状态，不得绕过隔离。
 
 ## 4.3 SP-02/SP-03 联邦调度与依赖传播规格设计
 
 ### 4.3.1 实现思路
 
-Karmada 的 `PropagationPolicy` 规定哪些对象需要传播，以及允许向哪些成员集群传播（U）。本功能域使用该策略传播 Runner Pod，不另行实现 GitHub 作业调度器（D）。每个临时 Runner Pod 只在一个成员集群运行。成员 Kubernetes 负责选择运行节点。Karmada 使用 `propagateDeps` 处理 Pod 引用的 JIT Secret 等依赖对象。Pod 与 Secret 可以先后到达；成员 Kubernetes 不能在必需的 Secret 尚未可用时完成相应的容器启动。
+Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner Pod 只在一个成员运行（D），成员 Kubernetes 选节点。`propagateDeps` 传播 JIT Secret 等引用依赖。Pod 与 Secret 异步到达；必需的 Secret 未就绪时，容器不能启动。
 
 ### 4.3.2 实现设计
 
@@ -380,13 +380,13 @@ Karmada 的 `PropagationPolicy` 规定哪些对象需要传播，以及允许向
 | 主凭证 | 平台不得仅因为传播 Runner Pod 就把 GitHub 管理凭证分发到所有成员。 | 只有明确存在成员侧消费者并已授权时，才允许额外分发相应凭证。 |
 | 执行态 | 成员 Kubernetes 负责维护 Pod 的 `Pending`、`FailedMount`、`ErrImagePull` 等状态或事件。 | 平台必须显示或保存异常原因，不得因此重复提交同一个 GitHub 作业。 |
 
-如果没有符合要求的成员集群，Runner Pod 必须保持未就绪或不可调度状态，并保留调度失败原因。成员失去连接时，平台必须区别尚未运行的 Runner Pod 和正在执行的 GitHub Job。Karmada 的资源重新分发不等于 GitHub Job 可以无损迁移或安全重复执行。传播策略发生资源冲突时，平台必须遵守 Karmada 的冲突处理机制，不得覆盖不属于本系统管理的资源。
+无合格成员时，Pod 保持未就绪或不可调度，并保留原因。成员失联后，区分待运行 Pod 与执行中 Job；重新分发不等于无损迁移或安全重试。资源冲突按 Karmada 规则处理，不覆盖非本方案资源。
 
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
 
 ### 4.4.1 实现思路
 
-ARC Controller、ARC Listener 和临时 Runner 必须使用各自需要的访问身份。Controller 负责管理 Runner 对象并使用 GitHub 管理凭证。Listener 使用独立身份访问 Karmada API，只获得处理其 Runner 服务所需的权限。临时 Runner 使用 ARC 创建的 JIT 配置注册到 GitHub，不应获取长期 GitHub 管理凭证。本功能域采用 Kubernetes ServiceAccount、TokenRequest 和 RBAC 的身份与授权机制（U）。令牌的签发、有效期、更新与审计由平台身份管理者负责（D）。
+Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 GitHub 管理凭证；Listener 以最小权限访问 Karmada API；Runner 使用 JIT 注册配置，不持长期管理凭证。身份基于 ServiceAccount、TokenRequest、RBAC（U）；令牌签发、到期、轮换与审计由平台负责（D）。
 
 ### 4.4.2 实现设计
 
@@ -399,17 +399,17 @@ ARC Controller、ARC Listener 和临时 Runner 必须使用各自需要的访问
 
 **部署方必须提供的认证参数（P）**：API 地址与端口、服务器证书名称、可信 CA、令牌的使用范围和有效期、凭证颁发者以及更新方法。平台必须规定 Listener 如何加载更新后的令牌或证书。仅修改 Kubernetes Secret 不能证明 Listener 一定会自动使用新凭证。
 
-**异常处理**：地址无法解析或 TCP 连接失败时，记录网络错误；服务器证书链或证书名称校验失败时，记录 TLS 错误；API 返回 HTTP 401 时，记录身份认证失败；API 返回 HTTP 403 时，记录权限不足。平台必须保留错误类型以供身份或网络管理员定位，不能关闭 TLS 校验，也不能通过临时授予 `cluster-admin` 绕过故障。日志不得包含令牌、私钥或 Secret 数据。
+**异常**：DNS/TCP 失败记网络错误；证书链或名称不匹配记 TLS 错误；HTTP 401 记认证失败，403 记权限不足。保留类别；不得关闭 TLS 校验或授予 `cluster-admin`；日志不得含凭证原文。
 
 ## 4.5 SP-06/SP-07 状态与生命周期规格设计
 
 ### 4.5.1 实现思路
 
-成员 Kubernetes 负责生成 Runner Pod 的实际状态。Karmada 将该状态提供给统一控制面（U），ARC 根据其管理的 Runner 对象和 Pod 状态执行原有生命周期处理。本功能域通过 `ResourceInterpreterCustomization` 规定单目标 Runner Pod 的状态保留规则（D），不改变上游 ARC 的状态判断逻辑。动态对象仍由相应控制器根据 OwnerReference 与 Finalizer 管理。
+成员 Kubernetes 生成 Pod 状态，Karmada 回传控制面（U），ARC 据此管理生命周期。`ResourceInterpreterCustomization` 保留单目标状态（D），不改变 ARC 判断；对象回收沿用 OwnerReference/Finalizer。
 
 ### 4.5.2 实现设计
 
-**下面的阶段名称用于描述设计流程，不是 Kubernetes Pod Phase 或 ARC 的 API 枚举值。**
+**下列阶段是设计描述，不是 Kubernetes 或 ARC 的 API 枚举。**
 
 | 逻辑阶段 | 进入条件 | 规定的行为 |
 |---|---|---|
@@ -421,15 +421,15 @@ ARC Controller、ARC Listener 和临时 Runner 必须使用各自需要的访问
 | 作业结束（Completed / Failed） | ARC 和 GitHub 按各自接口识别任务结束状态。 | ARC 开始相应的临时资源回收流程，平台保留失败原因。 |
 | 资源删除中（Deleting） | ARC 或 Karmada 开始删除关联的临时对象。 | 各控制器处理其拥有的资源；删除失败时保留对象标识、Finalizer 和错误原因。 |
 
-**Pod 状态解释要求**：对只在一个成员运行的 Runner Pod，状态解释器必须保留 `status.phase`、`status.conditions`、`status.containerStatuses[].name` 及 ARC 读取的容器运行字段。如果成员没有返回状态，不能自行生成 Ready 条件。当前 Lua 使用“第一个非空 `status`”的规则，只适用于单目标且没有状态冲突的场景。新增跨成员迁移或多副本场景前，必须另行定义状态来源选择及冲突解决规则。
+**状态解释**：保留 `status.phase`、`status.conditions`、`status.containerStatuses[].name` 及 ARC 所需的容器状态。无成员状态时不得生成 Ready。当前 Lua 取第一个非空 `status`，仅适用于单目标、无冲突；支持迁移或多副本前须定义冲突处理。
 
-**删除要求**：平台必须能够关联一次任务对应的临时 Runner、Runner Pod、JIT Secret 和 Karmada Binding/Work。各控制器分别完成删除，不要求所有对象同时消失。Finalizer 阻止删除时，运维人员必须先确认该 Finalizer 的所属控制器和未完成的清理操作，不能随意清空它。
+**删除**：关联 Runner、Pod、JIT Secret、Binding/Work。各控制器独立删除；Finalizer 阻塞时先查所有者和未完成操作，不得直接清空。
 
 ## 4.6 SP-08 NPU 资源规格设计
 
 ### 4.6.1 实现思路
 
-Kubernetes Device Plugin 负责向成员 Kubernetes 发布扩展设备资源（U）。本功能域必须依据目标 Runner 服务的设备需求，设置成员候选范围和 Runner Pod 的扩展资源请求（D）。Karmada 负责选择成员，成员 Kubernetes 负责选择节点；本功能域不重新实现 NPU 设备分配。具体硬件架构、操作系统、驱动、固件、设备插件及容器运行时必须依据目标 NPU 产品资料确定（P）。
+Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 Pod 请求（D）；Karmada 选成员、Kubernetes 选节点，不重实现设备分配。架构、OS、驱动、固件、插件及运行时由设备选型确定（P）。
 
 ### 4.6.2 实现设计
 
@@ -441,7 +441,7 @@ Kubernetes Device Plugin 负责向成员 Kubernetes 发布扩展设备资源（U
 | 镜像/驱动/Runtime | 设备驱动、固件和容器运行时的兼容资料。 | 部署方必须核对 Runner 镜像与目标设备的兼容性；不能因为安装了设备插件就推定全部软件栈可用。 |
 | Runner Scale Set | 服务目录及 GitHub 工作流标签。 | 硬件能力不能互换时，平台必须配置不同 Runner 服务，不能默默把 NPU Job 交给普通 CPU Runner。 |
 
-没有符合条件的设备时，Runner Pod 必须保留不可调度状态及原因。插件未就绪或节点扩展资源消失时，不得删除 NPU 资源请求，也不得改用不具备 NPU 的节点执行任务。资源分配失败由成员 Kubernetes、设备插件和设备运维人员按各自职责定位。设备型号、资源名称和性能指标属于部署选型参数（P）。
+设备不足时，Pod 保持不可调度并保留原因；插件未就绪时不得删掉 NPU 请求或降级至 CPU 节点。成员 Kubernetes、设备插件和运维人员分别排障；型号、资源名、性能指标为部署参数（P）。
 
 ## 4.7 SP-09 跨功能质量与可服务性规格
 
@@ -454,7 +454,7 @@ Kubernetes Device Plugin 负责向成员 Kubernetes 发布扩展设备资源（U
 | 可服务性 | 平台必须能够使用 GitHub Run、Runner Scale Set、临时 Runner、Pod UID、Binding/Work 和成员集群定位同一次任务的处理状态。 | 日志保留期限、审计要求及观测平台。 |
 | 升级与兼容 | 部署方必须记录 ARC CRD、Controller、Listener、Runner 镜像及 Karmada API 的版本，并按目标版本的接口检查兼容性。 | 组件版本、镜像摘要和升级回滚窗口。 |
 
-第 5 章 F-01～F-06 必须遵守 SP-01～SP-09。每项 FMEA 应明确失效原因、影响、检测方式、恢复方法和责任方。如果业务尚未提供性能目标、设备型号或安全等级，文档必须标记为待确定参数，不得填写无依据的数值。
+F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复和责任。未确认的性能、设备、安全参数标待定，不编造数值。
 
 # 5 功能实现设计
 
