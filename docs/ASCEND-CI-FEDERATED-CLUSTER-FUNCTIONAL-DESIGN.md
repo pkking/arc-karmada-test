@@ -11,7 +11,7 @@
 
 ## 1.1 目标与职责
 
-将原先项目独占的多个执行集群纳入 Karmada，统一管理 GitHub Actions Runner 的创建、分发与回收。
+将项目独占集群纳入 Karmada，统一管理 Runner 供给、分发和回收。
 
 | 职责 | 实现主体 | 边界 |
 |---|---|---|
@@ -21,29 +21,29 @@
 | 状态与凭证适配 | ResourceInterpreterCustomization、Listener Token / RBAC、propagateDeps | 保留 ARC 所需的 Pod 状态和 JIT Secret |
 | 设计契约与治理 | 本子系统接口适配、策略、身份与状态约束 | 由本项目负责架构决策；不代替上游内部实现 |
 
-## 1.2 系统边界
+## 1.2 边界
 
 **边界内：** ARC Controller、Listener、Runner Scale Set；Karmada 控制面；纳管的 Kubernetes 成员集群、Runner Pod 和目标 NPU 节点资源。
 
 **边界外：** GitHub Actions 服务、业务项目、镜像仓库及现有企业级监控系统。
 
-系统边界表示统一联邦执行的运行范围，组件可依据部署条件运行在不同 Kubernetes / 宿主环境。图示选择了“Controller 在独立管理环境、Listener 定向成员、Runner 由联邦分发”的**参考部署拓扑**，并非上游唯一合法部署形态。跨控制面访问需要独立的凭据与网络设计。
+图示为参考拓扑：Controller 独立部署，Listener 定向成员，Runner 联邦分发。组件位置可调整；跨控制面访问仍需独立凭证和网络配置。
 
-## 1.3 子系统目标
+## 1.3 目标
 
 ![资源无法互用、资源利用不均衡与任务排队过长：联邦执行前后对比](images/federation-subsystem-goal-before-after.svg)
 
-**现状：** 集群按项目固定分配。不同集群不能共享空闲资源。部分集群资源空闲，部分集群任务排队。热点项目等待时间较长。
+**现状：** 集群按项目独占，空闲容量无法共享，任务排队。
 
-**目标：** ARC 统一管理 Runner 需求。Karmada 将 Runner 分发至满足条件的成员集群。系统支持项目间共享合格成员的执行容量，以减少资源错配和可避免的排队等待。
+**目标：** ARC 统一供给 Runner，Karmada 选择成员；共享合格容量，减少资源错配和等待。
 
-**设计边界：** 该图为问题/目标示意，利用率及排队收益没有定量证明；本设计不承诺指定改善百分比。联邦策略负责成员选择，成员实际容量、资源兼容性和 NPU 驱动属于部署输入。
+**边界：** 图为目标示意，不承诺利用率或排队收益；容量、兼容性和 NPU 驱动由部署提供。
 
 ## 1.4 整体架构
 
 ![ARC + Karmada 联邦调度执行子系统整体架构](images/overall-subsystem-architecture.svg)
 
-本子系统包含 ARC、Karmada、成员 Kubernetes 集群及 Runner 执行环境。图中灰色外框表示子系统边界。边界外的系统通过以下接口交互。
+包含 ARC、Karmada、成员 Kubernetes 和 Runner。灰框为边界；外部接口如下。
 
 | 外部子系统 | 方向 | 交互内容 |
 |---|---|---|
@@ -53,7 +53,7 @@
 | 镜像仓库 | 输入 | Runner 镜像、Action 镜像 |
 | 监控与审计系统 | 输出 | 运行日志、Kubernetes 事件、验证记录 |
 
-**设计范围：** 图中以一个集中 ARC、一个 Karmada 控制面和两个成员作为可扩展的逻辑示例，不限定 Kind 或具体地区。NPU 设备插件是目标环境依赖，按选型纳入成员集群；不依赖 `karmada-search`。
+**范围：** 一套 ARC、一套 Karmada、两个成员仅为示例；不限定地域或 Kind。NPU 插件按设备选型提供，不依赖 `karmada-search`。
 
 ## 1.5 关键约束
 
@@ -70,9 +70,9 @@
 
 ## 2.1 定位、使用者和边界
 
-本功能域向 GitHub Actions 工作流提供统一的计算资源入口，将原先固定按项目使用的集群汇聚成受控联邦候选集。用户仅选择 Runner 服务标签，平台将 Job 需求转换为短生命周期 Runner，通过 Karmada 选择成员并在成员 Kubernetes 内执行。它不是替代 GitHub Job Queue、重写 ARC 生命周期控制器或重建 Karmada 调度器。
+开发者仅选 Runner 服务；ARC 按需供给 Runner，Karmada 选择执行成员。复用 GitHub 队列、ARC 生命周期和 Karmada 调度，不重新实现。
 
-**业务参与者**：CI 开发者（提交 Job）、CI 平台工程师（定义 Scale Set 与策略）、资源池管理员（纳管成员与 NPU）、安全管理员（权限/凭证）、运维人员（升级/故障/审计）。外部系统包括 GitHub Actions、OCI 镜像仓库、已有身份/密钥系统、GitOps/部署面和观测系统。
+**参与者**：开发者、平台工程师、资源池管理员、安全管理员、运维人员。**外部依赖**：GitHub Actions、镜像仓库、密钥服务、部署与观测平台。
 
 ## 2.2 核心特性
 
@@ -170,7 +170,7 @@ NPU 专项适配为后续扩展，不单列核心特性。
 
 # 3 功能域总体方案
 
-## 3.1 总体原则、设计模式与边界
+## 3.1 设计原则
 
 1. **职责分离**：GitHub 负责队列，ARC 负责 Runner 期望量与短生命周期，Karmada 负责成员选择和对象传播，成员 Kubernetes 负责节点调度与设备资源分配。
 2. **控制面与执行面分离**：Runner 管理请求汇入统一 API；Listener 和 Runner 可以部署于执行域，但其权限、连接地址和证书与目标 API 一致。
@@ -182,19 +182,19 @@ NPU 专项适配为后续扩展，不单列核心特性。
 
 | 选型 | 方案结构 | 主要优点 | 主要限制 |
 |---|---|---|---|
-| A：每个成员集群独立部署 ARC | 每个成员集群部署自己的 ARC Controller 和 Runner Scale Set。多个集群可对外提供相同 Runner 服务名称，但同名 Scale Set 必须位于不同 Runner Group。 | 各集群可以独立管理 Runner 的创建和回收，控制器故障主要影响所在集群。 | **GitHub Actions 服务决定作业分配给哪个 Runner Scale Set，平台不能配置跨 Scale Set 的作业分配算法。** 当多个同名 Scale Set 同时在线时，GitHub 官方将这种分配方式描述为不可配置的 `assignment race`。因此，平台不能直接按成员集群的剩余容量、NPU 类型、地域或优先级制定统一的跨集群调度策略。 |
-| B：ARC + Liqo | ARC 结合 Liqo 提供的跨集群资源和网络能力。 | 可以复用 Liqo 的跨集群网络及资源抽象能力。 | 必须独立设计跨集群网络、资源映射和控制面依赖。本仓库没有将该方案作为目标实现。 |
-| **C：ARC + Karmada（选定）** | 平台通过一个统一 Runner Scale Set 接收 GitHub 的任务需求。ARC 管理临时 Runner，Karmada 根据 PropagationPolicy 将 Runner Pod 分发到符合条件的成员集群。 | **成员集群的选择由平台维护的联邦策略控制**。平台能够规定候选成员、集群属性和资源约束，不需要依赖 GitHub 在多个独立 Scale Set 之间选择执行集群。 | 平台必须设计跨控制面的身份、JIT Secret 传播、Pod 状态反馈及临时资源回收。Karmada 的策略也不自动保证多个独立 Runner Pod 按固定比例分配。 |
+| A：各成员独立 ARC | 各集群部署 Controller 和 Scale Set；同名 Scale Set 分属不同 Runner Group。 | 独立管理和故障隔离。 | **跨 Scale Set 的 Job 分配由 GitHub 决定，平台无法定制调度策略**；同名 Scale Set 之间存在不可配置的 `assignment race`，无法按成员容量、NPU、地域或优先级决定分配。 |
+| B：ARC + Liqo | ARC 结合 Liqo 跨集群资源和网络能力。 | 复用资源与网络抽象。 | 需额外设计跨集群网络和资源映射；非当前实现。 |
+| **C：ARC + Karmada（选定）** | 统一 Scale Set 接收需求；ARC 供给 Runner，Karmada 分发 Pod。 | **平台控制候选成员和放置约束。** | 需适配身份、JIT Secret、Pod 状态及回收；不保证多个独立 Pod 按固定比例分配。 |
 
-### 3.2.1 作业分配与成员集群调度的责任边界
+### 3.2.1 调度职责
 
-为了避免把两个不同的调度阶段混为一谈，本设计作如下区分：
+作业分配与 Runner Pod 放置是两级决策：
 
-1. **GitHub Actions 负责作业与 Runner 服务匹配**。GitHub 根据工作流的 `runs-on`、Runner Group 和 Runner Scale Set 的注册信息决定向哪个 Scale Set 分配作业。采用方案 A 时，多个独立 Scale Set 之间的选择仍由 GitHub 服务完成，平台不能提供自定义的集群间作业分配算法。
-2. **ARC 负责 Scale Set 内的 Runner 数量和生命周期**。ARC Listener 接收 GitHub 分配给当前 Scale Set 的作业消息及数量信息，并更新 `EphemeralRunnerSet` 的期望数量。ARC 的 `minRunners` 和 `maxRunners` 用于限制或预置该 Scale Set 的 Runner 数量，**不是跨多个 Scale Set 的集群调度策略**。
-3. **Karmada 负责选定 Runner Pod 的执行成员**。采用方案 C 时，ARC 为统一 Runner Scale Set 创建 Runner Pod。Karmada 根据本系统配置的 `PropagationPolicy` 选择允许执行该 Pod 的成员集群。成员 Kubernetes 继续负责该集群内部的节点调度。平台能控制的是 **Runner Pod 的成员放置策略**，而不是 GitHub Actions 内部的 Job 分配算法。
+1. **GitHub：** 按 `runs-on`、Runner Group 和注册信息分配 Job。方案 A 的跨 Scale Set 选择不可定制。
+2. **ARC：** Listener 接收任务需求，调整 `EphemeralRunnerSet` 期望数量；`minRunners` / `maxRunners` 控制容量，**不决定跨 Scale Set 的任务分配**。
+3. **Karmada：** 按 `PropagationPolicy` 选择 Runner Pod 的执行成员；成员 Kubernetes 选择节点。平台控制 **Pod 放置**，不控制 GitHub 的 Job 分配。
 
-**选型结论（D）**：本功能域需要根据成员集群的资源条件控制 Runner 的执行位置。因此选择方案 C，将跨集群放置决策放在平台可管理的 Karmada 策略中。方案 A 虽然可以在多个集群独立提供 Runner 服务，但当多个 Scale Set 都有资格接收同一种任务时，平台不能直接控制 GitHub 将具体作业分配给哪一个 Scale Set。该差异是本次选型的主要依据，而不仅是方案 A 缺少集中管理。
+**结论（D）：选 C。** Karmada 策略由平台控制成员放置；方案 A 的跨 Scale Set Job 分配由 GitHub 决定，平台不可定制。
 
 **上游依据**：
 
@@ -219,15 +219,15 @@ flowchart LR
   M2 -.Pod status.-> API
 ```
 
-需求方向为 GitHub → Listener → ARC → Karmada → 成员 Runner。反馈方向为 Runner → GitHub 和成员 Pod.status → Karmada → ARC。状态/依赖传播是两个上游控制器体系之间的**集成契约**，参见第 4 章。
+请求：GitHub → Listener → ARC → Karmada → 成员 Runner；反馈：Runner → GitHub，Pod.status → Karmada → ARC。状态与依赖契约见第 4 章。
 
-## 3.4 功能域系统元素及逻辑架构
+## 3.4 组件与逻辑架构
 
-### 3.4.1 逻辑组件架构
+### 3.4.1 逻辑架构
 
 ![联邦调度执行系统逻辑架构](images/federation-layered-architecture.svg)
 
-本子系统要解决的核心问题是：**项目与执行集群绑定，导致集群间资源难以互用、负载不均衡及任务排队**。架构采用 **ARC 集中管理 Runner + Karmada 联邦分发 + 成员 Kubernetes 原生执行** 的协作模式；以下重点说明各构件对整体问题的贡献，而非展开上游组件的内部实现。
+**问题：** 项目与集群绑定，空闲容量难共享、任务排队。**方案：** ARC 统一供给，Karmada 分发，成员 Kubernetes 执行。
 
 | 架构构件 | 主要解决的问题 / 架构职责 | 与其他构件的协作关系 |
 |---|---|---|
@@ -237,13 +237,13 @@ flowchart LR
 | 成员 Kubernetes 与 Runner Pod | **提供实际、相互隔离的任务执行能力**：让集中管理的 Runner 在选中的成员集群使用当地计算资源执行 GitHub Job。 | 接收 Karmada 下发的 Runner 工作负载，使用成员原生调度与网络执行任务，并向控制面反馈状态。 |
 | ARC–Karmada 集成适配（本系统设计） | **消除两套上游系统之间的语义与环境差异**：保障跨控制面访问、临时注册凭证可用、Runner 就绪状态可被正确识别。 | 在 ARC、Karmada 与成员 Kubernetes 之间补齐通信鉴权、依赖传播和状态聚合约束，使上述管理、分发、执行链路闭环。 |
 
-**范围与边界：** GitHub Actions 是外部任务来源；ARC、Karmada 与 Kubernetes 是复用组件。`karmada-search` 不在本方案逻辑图中；NPU 设备插件属于成员环境依赖，不应误画为自研核心模块。跨成员执行是设计能力，不据此承诺均匀分配或固定排队收益。
+**边界：** GitHub 提供任务；ARC/Karmada/Kubernetes 为复用组件。`karmada-search` 不在范围内，NPU 插件属成员依赖。不承诺均匀分配或固定收益。
 
 部署关系见 3.6；资源、状态与接口契约见 3.5、4.4～4.6 和第 5 章。
 
 
 
-### 3.4.2 与周边系统元素的关系
+### 3.4.2 周边依赖
 
 | 周边元素 | 职责关系 | 进入/输出的实体 | 约束 |
 |---|---|---|---|
@@ -308,7 +308,7 @@ erDiagram
 3. 安装状态解释器、角色/绑定和传播策略，再声明 AutoscalingRunnerSet；保证 Listener 访问的是正确控制面。
 4. 安装官方 ARC Controller 并由其调谐动态对象。组件顺序、重试和升级回滚在部署计划中实现，不在功能设计中复刻具体 Shell 命令。
 
-## 3.7 上游官方资料及推导边界
+## 3.7 官方依据与边界
 
 | ID | 上游组件资料 | 本设计引用的能力 |
 |---|---|---|
