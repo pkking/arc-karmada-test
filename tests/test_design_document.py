@@ -42,7 +42,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         self.assertEqual(self.design.count("sequenceDiagram"), 10)
 
     def test_system_requirements_are_scenario_based_and_include_dfx(self):
-        section = self.design.split("## 2.4 系统需求 SR", 1)[1].split("\n## 2.5 ", 1)[0]
+        section = self.design.split("## 2.4 需求 SR", 1)[1].split("\n## 2.5 ", 1)[0]
         functional = section.split("### 2.4.1 ", 1)[1].split("### 2.4.2 ", 1)[0]
         nonfunctional = section.split("### 2.4.2 ", 1)[1].split("### 2.4.3 ", 1)[0]
         function_ids = re.findall(r"(?m)^\| \*\*(SR-\d\d-\d\d)\*\* \|", functional)
@@ -74,14 +74,14 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertIn(feature, self.design)
 
     def test_federated_features_remain_reader_facing(self):
-        overview = self.design.split("## 2.2 本功能域的系统特性", 1)[1].split("## 2.3 ", 1)[0]
+        overview = self.design.split("## 2.2 核心特性", 1)[1].split("## 2.3 ", 1)[0]
         for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
             self.assertIn(feature, overview)
-        for concept in ("统一 Runner 服务与资源共享", "平台可控的跨集群放置",
-                        "跨控制面的 Runner 正常执行", "联邦临时资源的生命周期管理"):
+        for concept in ("统一入口与资源共享", "可控成员放置",
+                        "跨控制面执行", "临时资源回收"):
             self.assertIn(concept, overview)
         for implementation_evidence in ("manifests/", "scripts/", ".github/", ".yaml",
-                                        "当前仓库的依据", "实现状态边界"):
+                                        "当前仓库的依据", "实现状态边界", "代码依据"):
             self.assertNotIn(implementation_evidence, overview)
         self.assertIn("统一入口 → 成员选择 → 跨集群执行与状态反馈 → 资源回收", overview)
         self.assertIn("**扩展候选：原 SR-06-01，当前非正式 SR**", self.design)
