@@ -698,7 +698,7 @@ sequenceDiagram
     GH-->>L: 返回分配给 Scale Set 的 Job 需求
     L->>ERS: Patch 期望 Runner 副本数
     C->>ERS: Watch 并调谐期望与实际副本
-    C->>K: 创建 EphemeralRunner 与 Runner Pod
+    C->>K: ARC 各控制器按原生生命周期创建 ER/JIT/Runner Pod（非原子）
     Note over Dev,K: 统一 Runner 标签屏蔽 member1 和 member2，后续由 Karmada 选择成员
     Note over GH,L: 此处代表一个 Scale Set 的 Listener 会话，不限制其他 Scale Set
 ```
@@ -1215,7 +1215,8 @@ sequenceDiagram
     end
 
     Pod->>Kubelet: 容器启动并进入 Running / Ready
-    Kubelet->>EC: 上报成员 Pod.status
+    Kubelet->>Kubelet: 更新成员 Kubernetes Pod.status
+    Note over Kubelet,EC: Karmada 控制器从成员 API 获取 Pod 状态，非 kubelet 直连 Karmada Controller
     Note over Kubelet,EC: 状态包含 containerStatuses 的容器名称、state 和 conditions
     EC->>RI: 聚合成员状态（statusItems）
     RI->>RI: 执行 AggregateStatus
@@ -1316,9 +1317,9 @@ sequenceDiagram
     Note over ARC,K: 需要先明确 Runner Pod 的 NPU 资源规格及集群兼容条件
     K->>KS: 将 Runner Pod 分发到候选成员集群
     KS->>KS: 依据资源请求、节点标签和可用节点进行调度
-    KS->>DP: 使用节点上的设备资源分配能力
-    DP-->>Pod: 提供已分配的 NPU 设备资源
-    KS->>Pod: 在选定节点启动 Pod
+    KS->>Pod: 选择合格节点并绑定 Pod
+    Note over KS,DP: kubelet 在选定节点与 Device Plugin 协作完成设备分配；调度器不直接调用插件
+    DP-->>Pod: 设备通过 kubelet/容器运行时暴露给 Pod
     Pod->>Pod: 执行 NPU 计算或测试
     Pod-->>GH: 上报 Job 结果，退出后释放资源
     Note over K,Pod: 真实 NPU 资源名、设备插件及兼容性由目标硬件选型决定
@@ -1338,14 +1339,13 @@ sequenceDiagram
     participant Ops as 资源池管理员
     ARC->>K: 提交带扩展资源请求的 Runner Pod
     K->>Cluster: 选择候选成员
-    Cluster->>Plugin: 检查节点 allocatable 与设备能力
+    Cluster->>Cluster: kube-scheduler 检查 Node allocatable 和 Pod 资源请求
     alt 设备资源不存在或不足
-      Plugin-->>Cluster: 无合格设备
+      Cluster-->>Cluster: 无合格节点，FailedScheduling
       Cluster-->>Ops: Pod Pending / FailedScheduling 可见
       Note over K,Ops: 不降级运行到无 NPU 的节点
     else 设备插件与资源就绪
-      Cluster->>Plugin: 请求设备分配
-      Plugin-->>Cluster: 分配设备
+      Note over Cluster,Plugin: 节点选定后由 kubelet 与 Device Plugin 协作分配设备
       Cluster-->>ARC: Runner Pod 状态回传
     end
 ```
