@@ -528,6 +528,56 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 **删除**：关联 Runner、Pod、JIT Secret、Binding/Work。各控制器独立删除；Finalizer 阻塞时先查所有者和未完成操作，不得直接清空。
 
+### 4.5.3 跨域逻辑状态机及正确性约束（T3）
+
+以下状态仅用于设计推理，不是 ARC、Karmada 或 GitHub 的原生状态字段；状态事实分别由其权威系统提供，不建立新的统一状态控制器。
+
+```mermaid
+stateDiagram-v2
+  [*] --> Requested
+  Requested --> Placing: ARC 创建 Runner Pod
+  Placing --> Pending: 已选择成员，等待依赖及节点调度
+  Placing --> Blocked: 无合格成员
+  Pending --> Ready: 成员 Pod 确认就绪
+  Pending --> Blocked: 资源/Secret/镜像异常
+  Blocked --> Pending: 条件恢复，原生控制器重试
+  Ready --> Executing: GitHub 分配并启动 Job
+  Executing --> Finishing: GitHub Job 结束
+  Ready --> Finishing: ARC 原生回收条件满足
+  Pending --> Finishing: ARC 原生失败处理或回收
+  Finishing --> Deleting: 删除被 API 接受
+  Deleting --> Reclaimed: 控制面与成员副本确认清除
+  Deleting --> CleanupUnknown: 成员失联/Finalizer 阻塞
+  CleanupUnknown --> Reclaimed: 恢复连接并核对
+```
+
+| 约束 | 不变量与禁止行为 |
+|---|---|
+| LC-01 Job 权威性 | 只有 GitHub Job 事实能够确认执行结果；Pod Ready/Failed、Work 同步不能推导 Job 成败或触发自行重派 |
+| LC-02 单一目标 | 每个 Runner Pod 正常只对应一个活动目标成员；不能在多份 status 中任取第一份作为执行事实 |
+| LC-03 控制器所有权 | ARC 管理 Runner 生命周期，Karmada 管理传播；集成层不能绕过其原生回收规则 |
+| LC-04 阶段隔离 | Secret 已到达、Pod Ready、Runner 已注册、Job 已开始是不同事件，任何一步不代表后续一步成立 |
+| LC-05 删除收敛 | 删除请求被接受不代表 Pod、Work、成员 Secret 已清除；未核实副本时只可标记清理结果未知 |
+| LC-06 重复及乱序事件 | 按对象 UID、所属 Cluster、目标成员和各系统权威状态核对；不同集群 resourceVersion 不可相互比较 |
+| LC-07 无重放承诺 | 未经 GitHub/ARC 协议及业务幂等性证明，不承诺 exactly-once Job、无损迁移或任意失败自动重新执行 |
+
+**状态判定**：GitHub 是 Job 终态权威；ARC 是 Runner 实例及回收权威；Karmada 是传播目标和 Work 状态权威；成员 kubelet/Kubernetes 是 Pod 实际运行状态权威。控制面同步落后时保留来源、对象身份与时间，使用 Unknown/未确认表达不确定性，不以旧 Ready 推导当前可执行。
+
+### 4.5.4 异步传播、状态冲突及恢复决策（T3）
+
+| 失效或竞态 | 设计处理 | 禁止行为 |
+|---|---|---|
+| JIT Secret 晚到，Pod FailedMount | 保留 Pending，依赖成员原生挂载重试并诊断 Secret 引用 | 不伪造 Ready |
+| 成员 Ready、控制面仍 Pending | 保留成员实际状态与 Karmada 同步滞后证据，继续原生调谐 | 不直接篡改 ARC 状态 |
+| 控制面 Ready、成员失联或状态缺失 | 核对 Binding 当前目标并标记事实过期/未知 | 不把缓存 Ready 当作新任务可执行保证 |
+| statusItems 多来源冲突 | 先依据活动 Binding/Work 和成员 Pod 身份确认唯一权威来源 | 不选择第一个非空状态 |
+| GitHub Job 已完成但 Pod 未删除 | GitHub 结果与 ARC 回收状态分别记录 | 不宣称所有临时资源已销毁 |
+| Pod 消失但 GitHub Job 未结束 | 依 GitHub/ARC 原生失败策略和生命周期处理 | 集成层不得自行重复派发 Job |
+| Work/Secret 删除滞后或成员失联 | 标记 CleanupUnknown；恢复连通后逐对象核查 UID、Finalizer、删除状态 | 不以 API 202/删除请求代表完成，也不强删未知 Finalizer |
+| 事件重复、乱序、旧资源同名重建 | 核对来源 Cluster、UID 与当前权威快照；旧事件不覆盖新对象 | 不跨集群比较 resourceVersion |
+
+**上游边界**：ARC 官方机制本身可能重试失败的 Runner Pod；这里禁止的是额外集成逻辑擅自重放 GitHub Job，而非禁止上游机制。具体超时值及重试限制必须对齐目标 ARC 版本，不在设计中杜撰统一 SLA。
+
 ## 4.6 SP-08 NPU 资源规格设计
 
 ### 4.6.1 实现思路
@@ -731,6 +781,36 @@ sequenceDiagram
 ```
 
 
+
+### 5.2.4.3 生命周期回收契约和异常时序（T3）
+
+```mermaid
+sequenceDiagram
+  participant G as GitHub
+  participant A as ARC Controller
+  participant K as Karmada
+  participant M as 成员 Kubernetes
+  G-->>A: Job 已结束 / Runner 可回收的权威信息
+  A->>K: 按 ARC 原生机制删除 Runner 关联对象
+  K->>M: 异步删除传播的 Pod 和 JIT Secret
+  alt 成员可达且清理已确认
+    M-->>K: 返回成员对象实际删除结果
+    K-->>A: 传播对象状态更新
+  else 成员失联或 Finalizer 阻塞
+    M--xK: 删除完成状态未知
+    Note over K,A: 保留 UID、Work、Finalizer、成员及错误；状态 CleanupUnknown
+  end
+  Note over G,M: 不以 Job 完成推断跨成员删除原子完成；不自行重新派发 Job
+```
+
+| 触发 | 应核对的事实 | 恢复责任 |
+|---|---|---|
+| ER/Pod 创建后 JIT 未可用 | 成员 FailedMount、Pod 引用及 Karmada 依赖传播状态 | Karmada/成员继续原生调谐，ARC 按自身版本规则处理失败 |
+| Pod Failed / Runner 注册失败 | ARC 原生 Runner 状态和 GitHub 是否已分配 Job | ARC/GitHub 的正式失败策略，不由集成层自创重投 |
+| Job completed 后删除中 | ER、控制面 Pod、Binding/Work、成员 Pod、两侧 Secret | ARC 和 Karmada 分别负责自身对象；审计标记未确认项 |
+| 删除被 Finalizer 阻塞 | deletionTimestamp、Finalizer 所属控制器与依赖 | 先修复原控制器或依赖，不直接删除未知 Finalizer |
+
+**幂等性**：重复 Watch/Delete 通知只促使核对已有对象，不能生成另一份 Job；跨控制面清理非原子且顺序不固定。
 
 ### 5.2.5 用户接口设计
 
@@ -1073,6 +1153,21 @@ sequenceDiagram
 ```
 
 
+
+### 5.5.4.2 多来源状态聚合及过期状态处理（T3）
+
+**当前实现差距**：`manifests/01-karmada-interpreter.yaml` 中的 `AggregateStatus` 使用第一个非空 `statusItems[i].status`，只在确实存在唯一可信来源时才适用，**没有实现**按目标成员选择、冲突隔离或过期识别。
+
+| 输入/条件 | 设计要求 | 不满足时 |
+|---|---|---|
+| ResourceBinding/Work 的当前活动目标 Cluster | 聚合源只能来自目标成员 | 无法唯一确认时不产生新的 Ready 结论 |
+| 成员 Pod 身份（Cluster、namespace、name、UID） | 来源与当前传播实例匹配，不使用旧 Pod/旧 Work 的状态 | 记为 Unknown 并保留冲突证据 |
+| Pod phase、conditions、containerStatuses | 保留 ARC 目标版本实际需要的全部状态字段 | 不合成缺失字段或假造 Ready |
+| 最新性 | 在同一对象/集群内使用 UID 和实际可比较的版本/观测时间；跨集群不比较 resourceVersion | 信息不全则保留未确认状态 |
+
+**扩展点边界**：目标版本 `ResourceInterpreterCustomization` 是否暴露目标 Cluster 和 Pod UID，以及 Lua 是否能查询当前 Binding/Work，必须由该版本接口确认。若缺少这些输入，则不能声称上述规则由现有 Lua 单独实现；只能保留严格的单来源前提，或在后续设计确定合适的外部状态选择机制。状态算法不得通过猜测字段伪实现。
+
+**正确性出口**：成员状态、控制面聚合状态和 GitHub Job 状态独立追踪。控制面旧 Ready 不得覆盖成员失联事实；Pod Ready 不等于 GitHub Job 成功。
 
 ### 5.5.5 用户接口设计
 
