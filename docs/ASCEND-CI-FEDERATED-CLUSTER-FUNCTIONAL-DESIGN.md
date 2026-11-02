@@ -666,6 +666,81 @@ sequenceDiagram
 
 **现有可复用设计**：组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；本节将其作为设计参考，**不将其代码或部署状态自动视为本仓库已实现**。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
 
+
+### 4.3.7 跨租户加权公平仲裁（PL-D04）
+
+**设计决策（D）**：Dispatcher 在 PL-D03 的**可互换 NPU 资源族/拓扑域**内做跨租户加权公平仲裁；各租户在相同有效优先级内按 FIFO 取出候选。公平计量用**已分配 NPU 卡时**而非 AI Core 利用率或 GitHub Job 数量；成员容量、拓扑和授权是硬约束，公平排序不得越过硬性准入。该机制不改变 GitHub 队列，也不抢占已运行 Pod。
+
+| 备选机制 | 结论 |
+|---|---|
+| 全局 FIFO | 容易因单租户大任务占据长期队首，不能表达不同租户配额；仅作为顺序基线 |
+| 仅按任务数轮转租户 | 2 卡任务和 16 卡任务成本不同，不适用于异构 NPU 池；不采用 |
+| 基于 CPU/NPU 混合资源的 DRF | 适合多资源竞争，但本设计的仲裁目标是同型号 NPU 卡时；CPU 仍作为准入约束，不在此引入无法比较的跨设备资源权重 |
+| **按资源族计量的 Weighted Fair Service（加权服务量）** | **选择为目标仲裁算法**：资源分配量和时间均入账，允许定义各租户权重，符合单个 NPU 资源维度的公平目标 |
+
+**作用域与输入**：公平域是 `(federation, NPU-family, topology-domain)`；不同设备型号/资源单位不能未经批准合并为一项卡时。租户身份来自经授权的 Runner 服务/资源池访问配置，必须在 Runner Binding 进入队列时可信可见；`tenantId` 为空或来源不可验证则进入默认受限租户，不享受额外权重。`weight(t) > 0` 由平台批准，默认权重策略必须显式定义；分配上限、保底与借用策略属于 P 类。
+
+**计量和选择（D）**：
+
+1. 对公平窗口 `W`，记租户已消耗服务量 `A(t,W)=Σ[实际 NPU 请求卡数 × NPU 工作负载占用秒数]`（单位：NPU 卡秒）；以真实 NPU workflow Pod 的请求和运行时间为事实，缺失结束事件不填零。任务已放行但 NPU Pod 尚未绑定的 grant 另入 `I(t)`，用于并发放行限额/超售控制，**不能将它当作已完成服务量**。保护中的预留 `R(t)` 计入资源预算和公平配额占用，避免单租户长期冻结其他租户容量，但不得重复计入 `A`。
+2. 活跃且具备合格成员容量的租户按 `A(t,W)/weight(t)` 从小到大选择；同值采用稳定租户 ID；每租户优先选择**有效优先级最高、同级最早入队**的候选 Binding。窗口老数据过期且新需求到来时正常参与竞争，不继承不可追踪的历史债务。
+3. 同一轮决定内先检查有效优先级（PL-D05）、资源授权和配额，再进行加权公平；对低于当前优先级但等待时间达到已批准的老化门槛的任务进行有限提升，避免跨类别长期饥饿。高优先级任务也不得打破成员授权或既有队首预留。
+4. 队首因资源碎片化不可放置时，遵守 PL-D03 的 Reserve Node/安全 Backfill；回填任务仍需经过租户配额与公平排序，且不能因自己总是能放置而连续绕过同一被保护队首。
+5. 仅在资源供给可行、成员调度有进展、长期运行任务最终释放资源、类别与租户身份可靠时，才能讨论长期公平收敛。**不承诺短期严格比例、固定等待上界或在无抢占条件下绝对不饥饿**。公平窗口 `W`、配额上限、权重和老化阈值必须批准后才能确定量化目标。
+
+**设计反例**：租户甲的 16 卡任务与乙的 2 卡任务不能按“每人各获得一个任务”认作公平；已经执行 16 卡×1 h 的服务量高于 2 卡×1 h。若甲的队首因拓扑无法运行，乙可以在独立资源 Backfill，但不得消费甲的有效预留。某租户身份缺失时不得继承其他租户的剩余配额或高权重。
+
+### 4.3.8 PR/nightly 可信分类与分时优先级（PL-D05）
+
+**设计决策（D）**：Dispatcher 优先级必须依据**放行前可验证、与本 Binding 一一关联**的授权任务类别。用户填写的 `runs-on` 标签仅是 Runner 服务选择，不能单凭标签认定当前 Job 是 PR/nightly。保持用户现有 `runs-on` 接口不变；默认不可判定时按普通类别处理，不伪造优先级身份。
+
+| 路径 | 可行性与风险 | 结论 |
+|---|---|---|
+| 按 `runs-on`/Pod 自定义 Label 猜测 PR 或 nightly | 相同 Scale Set 服务不同任务，标签可被提交者修改，且 Binder 创建时 Job 信息可能尚不可见 | **不采用作可信来源** |
+| 对已经启动的 Job 使用 ARC `JobID` / workflow 信息反推待放行 Runner | Job 关联通常发生在 Runner 可接单后，时序晚于调度决策 | **不能保证预调度分类** |
+| **经授权的预调度需求元数据契约** | 由可信 Listener/工作流事件接入层提供 job-key、repository、事件类别、信任域和匹配身份，关联到确切待调度 Binding；须定义先于放行的身份一致性 | **目标选型；必须确认上游可获取性，未确认前禁用类别差异化** |
+
+**分类契约及安全门槛**：权威输入至少包含 `provider, repository, workflowRunId, jobId, attempt, eventType, jobClass, tenantId, runnerServiceId, issuedAt, expiry, provenance`（仅设计逻辑字段，**不是 ARC/Karmada 原生字段清单**）；`jobClass` 由受信任平台分类器根据已授权事件与规则产生。接入组件需建立 job-key → 待供给 Runner demand → ER/Pod → Binding UID 的唯一可验证映射，跨回调重试与重建保证幂等；**如果一个 Scale Set 无法把 queued Job 一一映射至 Runner Binding，不能制造这种映射**。当来源冲突、签发已过期、多对一、多对多、无提前分类时，返回 `ClassUnknown` 并采用普通类别；不得提升到 PR 高优先级。
+
+**分时窗口**：目标支持本地业务时区的白天 PR 优先、夜间 nightly 优先；使用 IANA 时区及明确起止时间，跨夏令时由统一规则转换；变更需可审计的 `policyVersion`。时间窗变化只重排尚未放行的 Binding；已放行 NPU Pod、已保护的队首预留不被抢占或撤销。优先级按 `Class → EffectivePriority(now,age,policyVersion)` 计算；老化上限及最低服务份额是 P 类参数。高优先级不能无限推迟低类，公平依 PL-D04 限制单租户独占。
+
+**不可绕过的判断**：同一 `runs-on` 服务同时收到 PR/nightly，且预调度 job-key 无法绑定到某 Runner 时，两个 Binding 都是 `ClassUnknown`；**本方案这时只能按默认 FIFO/公平执行，不能声称已经完成白天 PR 优先、夜间 nightly 优先**。若业务明确要求这种体验而上游缺少映射，需先批准独立可信任务准入/关联机制的接口设计；不能通过改优先级字符串绕过身份缺口。
+
+**证据**：[ARC Job metadata labels proposal #4485](https://github.com/actions/actions-runner-controller/issues/4485) 是“Job 关联后同步元数据”的社区请求，**不能证明放行前可得 Job 类别**；目标 ARC 版本的 Listener/ER 生命周期须单独核对。
+
+### 4.3.9 Dispatcher 故障接管与安全降级（PL-D06）
+
+**设计决策（D）**：正常态由 Dispatcher 独占其 `schedulerName` 对应 Binding 的 Hold/Release/Cluster 选择。故障时先尝试**同等语义的另一 Dispatcher Leader 接管**；仅在新 Leader 不能恢复且由明确的健康判据触发时，才允许互斥的 break-glass 官方 Karmada Scheduler 用同一 `schedulerName` 恢复基本成员放置。**降级可损失 FIFO、跨租户公平、Reserve/Backfill，但不能丢失成员授权、NPU 请求与已绑定 Runner 的单目标/不重复执行约束。**
+
+| 状态 | 进入证据与允许操作 | 不变量与退出条件 |
+|---|---|---|
+| `ACTIVE` | 唯一 Dispatcher Leader 的进度新鲜；账本与成员容量可信 | Dispatcher 是唯一 Binding Writer，正常按 PL-D03～05 排序、保护及放行 |
+| `RECOVERING` | Leader 进度丢失、租约易主或 Provider 账本不可信 | 暂停新的 release；从 Binding、grant、成员 Pod/Node、预留标记重建队列和容量，完成核对后才回到 ACTIVE |
+| `DEGRADED` | 进度/恢复超出已批准的控制面阈值，watchdog 确认旧 Dispatcher 已失去写入权 | 官方 Karmada Scheduler 以**相同 schedulerName** 处理仍待调度 Binding，仅在合格成员中按可实现的安全容量约束放置；明示公平/预留策略降级 |
+| `FAIL_CLOSED` | 无法证明单写者互斥、授权成员/容量事实可信或原有预留约束安全 | 禁止新的 Binding 放行；允许现有 Pod 在成员层继续原生调度和清理；人工排除歧义后再切换 |
+| `RESTORING` | Dispatcher 恢复、正常版本/配置一致，且应急实例已确认停止写入 | 重建账本、队列和活跃保护，修正异常 grant；验证唯一 Writer 后恢复 ACTIVE，不重新处理已经成功放行的 Binding |
+
+**接管顺序和 Fencing 契约**：
+
+1. **健康证据必须包括调度进度**，不能只检查 Leader 进程存活或后台自动续约的 Lease；需要 `lease freshness`、`last placing progress`、成员状态采集新鲜度、循环调谐超时及 API 写入故障。空闲联邦允许无放行动作，但必须仍有成功决策循环/主动健康探测，避免“没有任务”被误判为卡死。
+2. Leader 只有在自己的租约和写入期限均有效时才可发送 Binding/Node 写入；租约失效需停止写入并释放身份。Watchdog 触发 break-glass **必须先完成旧 Writer 禁止写入的可验证条件**（进程停止或 fencing/权限收回），仅将另一 Deployment 扩至 1 并不足以自动证明网络分区下不存在双写。
+3. 新 Leader 在放行前重建未落地 grant 与 Node 预留，核对实际 PodScheduled 和租约；未完成先 `RECOVERING`，不要让内存状态为空就认为资源全部空闲。乐观并发更新检查 Binding `resourceVersion`，冲突必须重新读取而不是双份提交。
+4. break-glass 使用与目标 `ResourceBinding.spec.schedulerName` 相同的调度器名，并以目标版本确认能实际处理该 GVK、`Divided` 独立 Pod 单目标、容量 Estimator 开关与约束。若目标版本无法安全处理或需要覆盖未知预留，进入 FAIL_CLOSED。它不管理 Dispatcher 的全局 FIFO/同组 Hold，**不能宣称降级仍保有原公平与队首预约保证**。
+5. 恢复时先停止应急 Writer，再归并尚未放行 Binding 和被打断的预留；已在成员运行的 Runner 保持单目标，不因集成层恢复而复制或重派 GitHub Job。逻辑预留可释放但 Node taint 必须以归属与短租约安全撤销；成员 Janitor 负责失去 Dispatcher 续租后的清理。
+6. 故障切换时长、进度阈值、授权/账本一致性条件和控制面超时必须作为 P 类参数批准。宁可新增任务等待，也不能通过不可信容量或双写来追求虚假的可用性。
+
+**DFX 静态反例**：
+
+| 反例 | 设计预期 | 失败判据 |
+|---|---|---|
+| Leader Lease 仍被后台续约，决策循环已停止 | 进度 Watchdog 判定不可用并触发接管/FAIL_CLOSED | 仅看 Lease 判为健康，全部新 Runner 永久 Hold |
+| 两个节点网络分区，旧 Dispatcher 仍可访问 Karmada API | 只有完成旧 Writer Fencing 才允许应急实例写 Binding | 同一 Binding 先后被两个 Writer 改写到不同 Cluster |
+| 冷启动观察不到先前 grant，但 Node 上有已绑定 workflow Pod | RECOVERING 先重建账本；未知资源不放行 | 仅凭空内存 ledger 当作全量可用 NPU |
+| 应急调度期间有带 reservation taint 的 Node | 不将 taint 当成空闲资源；确认成员实际可调度或保持等待 | 因错误 Estimator 结果把队首/后继引向被保护 Node |
+| Dispatcher 恢复时应急调度器仍在写入 | 保持 DEGRADED/FAIL_CLOSED，确认降级写者退出后再恢复 | 双写、旧 Binding 重新传播或复制运行 Job |
+
+**上游机制证据**：[Karmada `ResourceBinding` v1alpha2 API](https://karmada.io/docs/reference/karmada-api/work-resources/resource-binding-v1alpha2/) 和 [`PropagationPolicy` API](https://karmada.io/docs/reference/karmada-api/policy-resources/propagation-policy-v1alpha1/) 包含 schedulerName 等能力，**不表示官方内建 Dispatcher 的队列/fencing**；组织 [arc-fedsched 设计](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 的 Hold/Release 与 break-glass 论证可复用。具体升级版本、Karmada failover/descheduler 共写风险、保护 taint 兼容性均须锁定 API 和控制器机制；本文只描述目标架构。
+
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
 
 ### 4.4.1 实现思路
