@@ -7,7 +7,7 @@
 
 **阅读原则**：**U** = 上游文档明确支持的机制；**D** = 昇腾CI针对组件组合定义的集成设计决策；**P** = 实施/厂商选型待定的参数。当前仓库 Manifest 是参考配置，不等于上游产品承诺；“设计完成”也不等于“已部署运行”。
 
-**设计基线与证据优先级（T0）**：本文件是 ARC + Karmada 联邦 Runner 执行功能域的**功能设计**，不是未来昇腾CI整体架构说明书，也不是部署/交付计划。设计首先核对仓库 `manifests/01-karmada-interpreter.yaml`、`02-propagation-policies.yaml`、`03-rbac.yaml`、`04-autoscalingrunnerset.yaml` 的**当前配置事实**；上游功能语义以与目标版本匹配的官方文档、CRD/API 契约为依据；组合行为如无法从两者推出，须作为 **D 类待验证集成约束** 而非已经获得保证的能力。目标设计与 Manifest 不同时明确标注差距，不通过修改 Manifest、编写部署命令或要求 PoC 来宣称闭环。
+**设计基线与证据优先级**：本文件是 ARC + Karmada 联邦 Runner 执行功能域的**功能设计**，不是未来昇腾CI整体架构说明书，也不是部署/交付计划。设计首先核对仓库 `manifests/01-karmada-interpreter.yaml`、`02-propagation-policies.yaml`、`03-rbac.yaml`、`04-autoscalingrunnerset.yaml` 的**当前配置事实**；上游功能语义以与目标版本匹配的官方文档、CRD/API 契约为依据；组合行为如无法从两者推出，须作为 **D 类待验证集成约束** 而非已经获得保证的能力。目标设计与 Manifest 不同时明确标注差距，不通过修改 Manifest、编写部署命令或要求 PoC 来宣称闭环。
 
 **设计层次**：第 2 章定义功能需求及用例，第 3 章定义系统总体方案与职责，第 4 章定义跨功能域约束，第 5 章定义功能单元的交互、接口与 DFX。时序图表达设计交互而非实测调用轨迹；不凭抽象交互图推断上游控制器拥有某个 API 或自动恢复能力。
 
@@ -223,7 +223,7 @@ NPU 专项适配为后续扩展，不单列核心特性。
 - [ARC 源码：`cmd/ghalistener/scaler/scaler.go`](https://github.com/actions/actions-runner-controller/blob/master/cmd/ghalistener/scaler/scaler.go)：`Scale` 处理收到的作业消息与 `TotalAssignedJobs`，后续更新当前 `EphemeralRunnerSet` 的目标 Runner 数量。这里没有跨独立 Scale Set 的成员选择算法。
 - [Karmada 官方：PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)：说明通过传播策略选择成员集群。本方案根据这些机制制定跨集群 Runner Pod 放置规则，**不把 ARC 与 Karmada 的组合描述成上游已认证的整体方案**。
 
-### 3.2.2 联邦放置能力与容量保证的边界（T1）
+### 3.2.2 联邦放置能力与容量保证的边界
 
 **设计结论：** 当前的基本放置路径为「策略限定候选成员 → Karmada 选择成员 → 成员 kube-scheduler 选择节点」。这能配置**允许放置的成员范围**，但不等于对独立 Runner Pod 提供跨成员最优选择、NPU 拓扑可用性判断、容量预留或排队公平保证。GitHub 的 Job 分配与 Karmada 的 Pod 放置是不同决策，不能相互替代。
 
@@ -323,7 +323,7 @@ erDiagram
 
 **数据分级与销毁（D）**：GitHub PAT/App 凭证、Listener Token、JIT Secret 属敏感数据，禁止在日志、Git、工单附件输出值；运行时对象删除由 ARC/Karmada 所有权规则驱动，审计只保留非敏感 ID/状态。Job 日志、镜像与第三方系统持久数据的保留/销毁服从各自系统策略，**不因 Pod 删除自动消失**。证书/Token 轮换同时考虑控制面存储、成员副本和日志暴露面。销毁保留期/合规等级若需精确数值，由企业数据分类制度提供（P），不虚构默认周期。
 
-### 3.5.1 对象标识、引用关系及权威事实（T2）
+### 3.5.1 对象标识、引用关系及权威事实
 
 **三类关系必须区分**：Kubernetes `OwnerReference/Finalizer` 表示原生控制器及删除语义；Pod 的 Secret 引用、Karmada Binding/Work 表示 API 对象之间的引用/传播关系；GitHub Job 与 Runner/Pod 之间的标识映射是用于追踪的业务关联。任何业务关联**均不能代替原生所有权而直接触发级联删除**。第 3.5 节的 ER 图只表达逻辑关系，不代表 CRD 中逐一存在对应的 OwnerReference。
 
@@ -347,7 +347,7 @@ erDiagram
 
 **权威状态原则**：GitHub 管理 Job 结果；ARC 管理 Runner 期望与生命周期；Karmada 管理传播的目标成员和 Work；成员 Kubernetes 管理真实 Pod 状态及节点调度。遇到短暂不一致时保留来源和时间，不以 Pod Ready 伪造 Job Completed，不以控制面 Work 成功伪造节点调度成功。状态冲突的完整转换规则由 T3 完善。
 
-### 3.5.2 创建、删除与数据销毁责任（T2）
+### 3.5.2 创建、删除与数据销毁责任
 
 | 触发 | 决策与执行责任 | 必须验证/保留的结果 |
 |---|---|---|
@@ -458,7 +458,7 @@ Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner P
 
 无合格成员时，Pod 保持未就绪或不可调度，并保留原因。成员失联后，区分待运行 Pod 与执行中 Job；重新分发不等于无损迁移或安全重试。资源冲突按 Karmada 规则处理，不覆盖非本方案资源。
 
-### 4.3.3 成员准入、容量与放置判定（T1）
+### 4.3.3 成员准入、容量与放置判定
 
 **输入**：Runner Pod 的资源请求与节点约束、目标 Runner 服务的授权成员集合、PropagationPolicy、成员健康状态和来自成员 Kubernetes 的实际 Node/Pod 调度事实。不能把成员级空闲总量等同于某个节点或某个拓扑域可以满足整个请求。
 
@@ -504,7 +504,7 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 **异常**：DNS/TCP 失败记网络错误；证书链或名称不匹配记 TLS 错误；HTTP 401 记认证失败，403 记权限不足。保留类别；不得关闭 TLS 校验或授予 `cluster-admin`；日志不得含凭证原文。
 
-### 4.4.3 身份权限与凭证传播矩阵（T4）
+### 4.4.3 身份权限与凭证传播矩阵
 
 下表明确生产目标和**当前 Manifest 差异**；具体 `get/list/watch/create/update/patch/delete` 操作须按锁定版本 ARC Controller/Listener 的实际调用审计确定，不凭推测一次性赋予宽权限。
 
@@ -522,7 +522,7 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 **最小权限判定原则**：RBAC `resourceNames` 仅对适用的操作和请求形式起约束作用，不能假定它限制任意 `list/watch` 或 `create`；细粒度鉴权需以 Kubernetes 原生规则与 ARC 实际请求验证。Runner 在隔离成员执行不代表无需控制面外的 GitHub 网络出站权限。
 
-### 4.4.4 凭证发行、轮换、失效与撤销状态（T4）
+### 4.4.4 凭证发行、轮换、失效与撤销状态
 
 | 凭证 | 发行与绑定 | 更新/轮换契约 | 撤销及故障处理 |
 |---|---|---|---|
@@ -569,7 +569,7 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 **删除**：关联 Runner、Pod、JIT Secret、Binding/Work。各控制器独立删除；Finalizer 阻塞时先查所有者和未完成操作，不得直接清空。
 
-### 4.5.3 跨域逻辑状态机及正确性约束（T3）
+### 4.5.3 跨域逻辑状态机及正确性约束
 
 以下状态仅用于设计推理，不是 ARC、Karmada 或 GitHub 的原生状态字段；状态事实分别由其权威系统提供，不建立新的统一状态控制器。
 
@@ -604,7 +604,7 @@ stateDiagram-v2
 
 **状态判定**：GitHub 是 Job 终态权威；ARC 是 Runner 实例及回收权威；Karmada 是传播目标和 Work 状态权威；成员 kubelet/Kubernetes 是 Pod 实际运行状态权威。控制面同步落后时保留来源、对象身份与时间，使用 Unknown/未确认表达不确定性，不以旧 Ready 推导当前可执行。
 
-### 4.5.4 异步传播、状态冲突及恢复决策（T3）
+### 4.5.4 异步传播、状态冲突及恢复决策
 
 | 失效或竞态 | 设计处理 | 禁止行为 |
 |---|---|---|
@@ -648,7 +648,7 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 | 可服务性 | 平台必须能够使用 GitHub Run、Runner Scale Set、临时 Runner、Pod UID、Binding/Work 和成员集群定位同一次任务的处理状态。 | 日志保留期限、审计要求及观测平台。 |
 | 升级与兼容 | 部署方必须记录 ARC CRD、Controller、Listener、Runner 镜像及 Karmada API 的版本，并按目标版本的接口检查兼容性。 | 组件版本、镜像摘要和升级回滚窗口。 |
 
-### 4.7.1 关键路径、性能和容量模型（T7）
+### 4.7.1 关键路径、性能和容量模型
 
 **关键路径**：GitHub Job 进入匹配的 Scale Set 需求 → Listener 接收需求 → ARC 调整 ERS 并调谐临时 Runner → Karmada 成员放置/Pod 与 JIT 依赖传播 → 成员 Kubernetes 调度、镜像与 Secret 准备 → Runner 向 GitHub 注册 → Job 开始。**工作流排队时间和 Runner 准备时间不能混为一项指标**；各系统阶段可能重叠，不能将不一致时钟上的事件简单相减。
 
@@ -665,7 +665,7 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 
 **设计验证准则**：应能将一项 Job 分解为可定位的等待阶段，区别需求已收到/成员已选定/Pod 已启动/Runner 已注册；在 `maxRunners` 达上限、节点碎片化、镜像准备慢、JIT 晚到时均能指出限制点，不宣称未核准的性能阈值。
 
-### 4.7.2 故障域、可用性与恢复约束（T7）
+### 4.7.2 故障域、可用性与恢复约束
 
 | 故障域/故障模式 | 影响范围 | 允许的恢复行为 | 禁止的保证与剩余风险 |
 |---|---|---|---|
@@ -679,7 +679,7 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 
 **故障隔离原则**：一个成员失效不意味着联邦整体立即失效，但需要可用的管理面、合格的其他成员和上游正常调谐，才能主张新的 Runner 可在其他成员执行。**正在执行的 Job 不承诺跨成员无损迁移**。未确认业务幂等性时禁止集成层自行重派 Job。可靠性设计遵循 T3 的 LC 约束、T4 的 SEC 约束、T6 的 FMEA；恢复时间、冗余副本数和可用性 SLO 均为待定参数，不冒充现有保证。
 
-### 4.7.3 跨组件诊断契约（T7）
+### 4.7.3 跨组件诊断契约
 
 **最小关联键**：GitHub `repository/run_id/job_id/run_attempt`（存在时）→ Runner Scale Set 名称及组织/仓库作用域 → ARC ER/ERS 和控制面 Pod 身份 → Karmada Binding/Work 与目标 Cluster → 成员 Pod 身份/状态。记录 Kubernetes `cluster + namespace + kind + name + UID`、事件来源、阶段、非敏感错误类型、观察时间；**不凭 Pod 名称猜测 Job ID**，也不把跨集群 `resourceVersion` 当全局顺序号。缺失关联时输出“未关联”，而不是推测。
 
@@ -708,7 +708,7 @@ F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复�
 >
 > FMEA 仅作定性分析；风险评分标准未批准，不填数值。
 
-## 5.0 DFX 风险判定与设计验证规则
+### DFX 风险判定与设计验证规则
 
 本章对全部功能使用统一的**定性 FMEA**，风险等级是设计评审优先级，**不是测得的故障概率或正式 RPN**：**严重**＝可能跨租户/长期凭证泄露、执行错误身份、失去关键安全边界或错误确认执行；**高**＝任务中断、重复执行风险、凭证失效或资源清理无法确认；**中**＝局部排队、暂时 Pending、可恢复的单功能异常。等级按潜在影响与可隔离性保守判定；不虚构概率、检测率或分数。风险高低不能仅凭恢复流程是否存在而自动下降。
 
@@ -789,7 +789,7 @@ sequenceDiagram
 | F01-01 | 工作流标签和 Runner 服务名称不一致。 | GitHub Job 不能匹配目标 Runner。 | 对照 `runs-on` 和 `runnerScaleSetName`，检查 GitHub Job 的排队信息。 | 平台管理员应修正不一致的服务配置，并检查修改影响。 | 平台维护者 |
 | F01-02 | GitHub 管理凭证失效。 | Runner 无法正常向目标 GitHub 仓库注册。 | 检查 Controller 或 Listener 的认证错误和凭证引用。 | 身份管理者更新凭证；不得通过更改业务标签来规避认证失败。 | 身份管理员、ARC 运维 |
 
-**T6 风险—措施—验证追踪**（关联：SR-01-01、SR-NF-01/05；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**（关联：SR-01-01、SR-NF-01/05；延续上方 FMEA 编号，不替代已有故障表）
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
@@ -945,7 +945,7 @@ sequenceDiagram
 | F02-02 | Runner 注册失败或 Job 执行中断。 | Job 不能完成，错误重试可能导致重复执行。 | 检查 GitHub Run、临时 Runner 状态和 Pod 事件。 | 应按 GitHub 与 ARC 的官方机制处理；没有明确去重依据时不得再次派发。 | GitHub、ARC 运维 |
 | F02-03 | 临时资源的 Finalizer 阻止删除。 | 临时 Pod 或 Secret 仍占用资源。 | 按对象 UID 检查 ER、Pod、Binding、Work 和 Secret 的删除状态。 | 由对象所属控制器完成清理；需要人工操作时先确认资源所有者。 | ARC、Karmada 运维 |
 
-**T6 风险—措施—验证追踪**（关联：SR-02-01、SR-02-02、SR-NF-03/06；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**（关联：SR-02-01、SR-02-02、SR-NF-03/06；延续上方 FMEA 编号，不替代已有故障表）
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
@@ -971,7 +971,7 @@ F-03 将 Runner Pod 与临时注册凭证分发至合格成员，并接收传播
 
 Controller 创建 Pod；Karmada 选成员、分发 Pod 和依赖；成员挂载 Secret 并启动。JIT Secret 晚到时 Pod 等待，不得判为可执行。成员故障保留原因，不重复提交 Job。
 
-**UC-05 设计前置条件及后置条件（T1）**：前置：已创建目标 Runner Pod，策略及授权成员集合已定义；后置：可记录其目标成员与传播结果，但只有成员节点调度和 Pod/Runner 注册条件满足后，才可认为具备执行条件。调度选中成员不等于节点容量已经保留。当前 `Divided/Weighted` 配置不能证明独立 Pod 之间的负载均衡。
+**UC-05 设计前置条件及后置条件**：前置：已创建目标 Runner Pod，策略及授权成员集合已定义；后置：可记录其目标成员与传播结果，但只有成员节点调度和 Pod/Runner 注册条件满足后，才可认为具备执行条件。调度选中成员不等于节点容量已经保留。当前 `Divided/Weighted` 配置不能证明独立 Pod 之间的负载均衡。
 
 | 用例分支 | 设计决策 | 必须保留的诊断证据 |
 |---|---|---|
@@ -982,7 +982,7 @@ Controller 创建 Pod；Karmada 选成员、分发 Pod 和依赖；成员挂载 
 | 同时多个 Pod 竞争剩余容量 | 不宣称原子预留、FIFO、公平或成功放置保证 | Binding/Work 与成员 Pod 的创建及调度事件 |
 | 已分发成员失联 | 状态保持可诊断；不将 Job 视作自动迁移完成 | Cluster Ready、Work 状态、Pod/Runner 关联 ID |
 
-**接口契约补充（T1）**：`PropagationPolicy.resourceSelectors` 负责选取资源对象，`placement.clusterAffinity` 只限制候选成员；`ResourceBinding/Work` 表达传播目标及同步结果，不能替代成员 `Pod.status`；成员实际节点调度失败以 Kubernetes 事件及 Pod 状态为准。出现多个可行目标时，本功能域不规定上游 Karmada 的具体打分顺序，也不将当前 `Weighted` 解释为跨 Pod 轮转策略。
+**接口契约补充**：`PropagationPolicy.resourceSelectors` 负责选取资源对象，`placement.clusterAffinity` 只限制候选成员；`ResourceBinding/Work` 表达传播目标及同步结果，不能替代成员 `Pod.status`；成员实际节点调度失败以 Kubernetes 事件及 Pod 状态为准。出现多个可行目标时，本功能域不规定上游 Karmada 的具体打分顺序，也不将当前 `Weighted` 解释为跨 Pod 轮转策略。
 
 #### 5.3.4.1 UC-05 在合格成员放置 Runner——运行时序（US-03）
 
@@ -1101,7 +1101,7 @@ sequenceDiagram
 
 **开发交付边界**：开发人员维护 `PropagationPolicy` 及关联权限，并检查目标 Runner Pod 被选中、非目标 Pod 不被选中。不得将 GitHub Job 重新派发作为 Karmada 对象传播失败的默认恢复动作。
 
-### 5.3.7 T1 调度正确性约束
+### 5.3.7 调度正确性约束
 
 | 约束编号 | 不变量/限制 | 反例及处理 |
 |---|---|---|
@@ -1126,7 +1126,7 @@ sequenceDiagram
 | F03-02 | JIT Secret 晚于 Runner Pod 到达成员。 | Runner Pod 无法挂载所需 Secret，启动推迟。 | 检查成员 Pod 的 `FailedMount` 事件和 JIT Secret 引用。 | Karmada 继续调谐依赖传播；成员 Kubernetes 继续挂载重试。平台不得因此重复派发 Job。 | Karmada、成员运维 |
 | F03-03 | 候选成员不可达或资源不足。 | Runner Pod 无法进入可执行状态。 | 检查成员 Cluster Ready、Binding/Work 和 Pod 调度事件。 | 运维人员应恢复成员或调整已授权的候选集；不得重复提交正在执行的 Job。 | 联邦与资源池运维 |
 
-**T6 风险—措施—验证追踪**（关联：SR-03-01、SR-03-02、SR-NF-02/03；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**（关联：SR-03-01、SR-03-02、SR-NF-02/03；延续上方 FMEA 编号，不替代已有故障表）
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
@@ -1252,7 +1252,7 @@ sequenceDiagram
 | F04-02 | Token 已到期或 Listener 未加载新 Token。 | Listener 的 Runner 数量更新操作失败。 | 检查 HTTP 401、Token 有效期和凭证加载记录。 | 身份管理员更新 Token；部署维护者按规定重载 Listener。 | 身份与部署维护者 |
 | F04-03 | Role 或 RoleBinding 的授权范围错误。 | Listener 无法操作所需资源，或存在越权风险。 | 检查 HTTP 403 与 Role/Binding 中的资源名称及操作。 | 安全管理员按最小权限规则修正配置，保留变更审计。 | 安全管理员 |
 
-**T6 风险—措施—验证追踪**（关联：SR-04-01、SR-NF-01/02；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**（关联：SR-04-01、SR-NF-01/02；延续上方 FMEA 编号，不替代已有故障表）
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
@@ -1312,9 +1312,9 @@ sequenceDiagram
 
 
 
-#### 5.5.4.2 多来源状态聚合及过期状态处理
+##### 5.5.4.2 多来源状态聚合及过期状态处理
 
-**当前实现差距**：`manifests/01-karmada-interpreter.yaml` 中的 `AggregateStatus` 使用第一个非空 `statusItems[i].status`，只在确实存在唯一可信来源时才适用，**没有实现**按目标成员选择、冲突隔离或过期识别。
+**当前配置差距**：`manifests/01-karmada-interpreter.yaml` 中的 `AggregateStatus` 使用第一个非空 `statusItems[i].status`，只在确实存在唯一可信来源时才适用，**没有实现**按目标成员选择、冲突隔离或过期识别。
 
 | 输入/条件 | 设计要求 | 不满足时 |
 |---|---|---|
@@ -1355,7 +1355,7 @@ sequenceDiagram
 | F05-02 | 同一个 Pod 出现多个互相冲突的状态来源。 | 控制面可能显示错误成员的状态。 | 核对 Binding 的目标成员与各来源 Pod 的标识。 | 设计必须先定义状态来源规则；不得静默采用第一个非空状态。 | 状态适配与 Karmada 管理者 |
 | F05-03 | 成员状态同步延迟。 | Runner 就绪信息不能及时反映到控制面。 | 比较 Pod 条件时间和控制面状态更新时间。 | 平台应根据批准的时效性目标设计告警，不能填写未经定义的 SLA。 | Karmada、ARC 运维 |
 
-**T6 风险—措施—验证追踪**（关联：SR-05-01、SR-NF-03/04；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**（关联：SR-05-01、SR-NF-03/04；延续上方 FMEA 编号，不替代已有故障表）
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
@@ -1466,7 +1466,7 @@ sequenceDiagram
 | F06-02 | 设备驱动、固件或容器运行时不兼容。 | Runner 容器启动失败，或者 NPU 作业执行失败。 | 检查节点事件、容器退出原因及设备运行环境版本。 | 设备维护者按厂商兼容资料调整镜像、驱动及运行时版本。 | 设备与运维维护者 |
 | F06-03 | NPU 设备资源耗尽或候选成员不可达。 | Pod 不能调度，GitHub Job 需要等待可用 Runner。 | 检查 Karmada 目标成员、Node allocatable 与 `FailedScheduling` 事件。 | 平台必须报告资源不足并维持 NPU 约束，不能改用普通 CPU 节点。 | 调度与资源池维护者 |
 
-**T6 风险—措施—验证追踪**（关联：扩展候选：非本期正式 SR；SP-08；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**（关联：扩展候选：非本期正式 SR；SP-08；延续上方 FMEA 编号，不替代已有故障表）
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
@@ -1487,7 +1487,7 @@ sequenceDiagram
 | F-05 状态反馈；UC-09/12 | 控制面 Pod 与当前 Binding/Work 可关联；成员 Pod 身份及状态可信 | Karmada 汇总成员 `Pod.status`；ARC 读取必要 `conditions`、`containerStatuses`；输出控制面可见状态 | 当前 Lua 只支持唯一可信状态来源；多来源/过期状态不能取首个非空；重复和乱序事件按 UID/目标 Cluster 核对，不伪造 Ready |
 | F-06 NPU 扩展；UC-07/13 | **非本期正式 SR**；选定设备插件发布的扩展资源名、数量、成员/节点约束及兼容环境 | ARC Runner Pod 模板携带扩展资源请求；Karmada 选成员，成员 kube-scheduler/kubelet/设备插件分配资源；输出 Pod 调度状态 | 设备不足或插件不可用时保持 Pending/异常；不得将单节点所需 NPU 跨成员拼接、移除资源请求或自动降级 CPU |
 
-**接口调用语义与真实上游分工（T5 纠偏）**：
+**接口调用语义与真实上游分工**：
 
 1. `GitHub Job Available → Listener → EphemeralRunnerSet` 是 ARC 的需求扩缩链路；`EphemeralRunnerSet → EphemeralRunner Controller → JIT configuration/Runner Pod` 才是细化后的动态对象管理链路。F-01/02 现有图的 `C→K: 创建 EphemeralRunner 与 Runner Pod` 仅为跨子系统简写，**不是一次原子 API 调用**，并不保证两个对象同时存在。
 2. `Karmada Policy` 为声明式配置，`Detector/Scheduler/Binding/Work` 是控制器协调的资源与状态；F-03 图中 `API→Policy`、`Binding→Member` 为说明性箭头，不代表 Policy/Binding 对象主动发起网络调用。成员实际资源分发与状态回传由 Karmada 相关控制器协调。
@@ -1511,7 +1511,7 @@ sequenceDiagram
 | FT-03：SR-05-01 | F-05 | SP-06 | 5.5.4.1 | `01-karmada-interpreter.yaml` |
 | **扩展候选：原 SR-06-01，当前非正式 SR** | F-06 | SP-02、SP-08 | 5.6.4.1 / 5.6.4.2 | 尚需设备选型；仓库未配置 NPU 扩展资源 |
 
-### 5.8.0 需求—用例—规格—接口—DFX 完整追踪（T8）
+### 5.8.1 需求—用例—规格—接口—DFX 完整追踪
 
 **追踪口径**：IR 是功能能力要求，SR 为场景需求，UC 为用例，F 为实现设计单元，SP 为跨功能规格。FMEA 的编号 `F01-01` 等为失效模式，不是 F 功能编号；US 为时序图编号，不是系统需求。AR 尚未进入迭代分解，不得虚构。下表明确**正式需求**与**扩展候选**的差异。
 
@@ -1526,13 +1526,13 @@ sequenceDiagram
 | IR-03 / FT-03 | SR-05-01 | UC-09、UC-12（状态异常） | F-05；5.5.6 | SP-06、SP-07；LC-01/02/06 | 5.5.9：F05-01～03 |
 | 扩展候选（不属于正式 IR/FT） | 原 SR-06-01（未纳入） | UC-07、UC-13 | F-06；5.6.6 | SP-02、SP-08；PL-04/05 | 5.6.9：F06-01～03 |
 
-**非功能要求的横向追踪**：SR-NF-01/02 对应第 4.4、5.4 及 F03-01/F03-04/F04-03/F04-04；SR-NF-03 对应 4.5、4.7.2、F02-03/F03-03/F05-02；SR-NF-04 对应 3.5.1、4.7.3 及全部功能诊断；SR-NF-05/06 对应 4.7.1、5.2、F02-01/F03-03；SR-NF-08 对应 4.3、5.3、PL-01/02。完整的非功能条目见 5.8.1。
+**非功能要求的横向追踪**：SR-NF-01/02 对应第 4.4、5.4 及 F03-01/F03-04/F04-03/F04-04；SR-NF-03 对应 4.5、4.7.2、F02-03/F03-03/F05-02；SR-NF-04 对应 3.5.1、4.7.3 及全部功能诊断；SR-NF-05/06 对应 4.7.1、5.2、F02-01/F03-03；SR-NF-08 对应 4.3、5.3、PL-01/02。完整的非功能条目见 5.8.2。
 
 **UC/US 对应关系**：UC-01→US-01；UC-03→US-02；UC-05→US-03；UC-06→US-04；UC-08→US-05；UC-09→US-06；UC-04→US-07；UC-07→US-08。UC-02、UC-10、UC-11、UC-12、UC-13 为异常分支，其中 UC-10/11/13 已给出异常时序，UC-02/12 由异常契约及状态规则覆盖；**没有对应独立 US 编号不表示该 UC 已被实现**。
 
 **现状与目标**：SP-03（Pod 选择器过宽）、SP-04（长期 GitHub 主凭证传播）、SP-05（Controller 高权限与 Token 轮换）、SP-06（状态解释器首个非空）均保留“当前配置与目标不符”的描述；未因设计追踪完成而改变其实际实现状态。涉及 NPU 强隔离、资源容量预约和多来源冲突处理的能力尚未具备可确认的实现依据。
 
-### 5.8.1 非功能需求与详细设计追踪
+### 5.8.2 非功能需求与详细设计追踪
 
 | 非功能需求 | 功能域规格 | 主要实现设计章节 |
 |---|---|---|
@@ -1545,6 +1545,20 @@ sequenceDiagram
 | SR-NF-08 策略可维护性 | SP-01、SP-02 | 4.2、4.3、5.3.6 |
 
 本表只将与 FT-01～FT-04 相关的正式 SR 关联至详细设计。第 4、5 章仍可保存 ARC/Karmada 的必要技术契约和 NPU 扩展参考，但不把所有实现机制或通用 DFX 项目升级为正式系统需求。量化参数未获得业务批准时，对应指标保持待定。
+
+### 5.8.3 最终设计评审的判定边界
+
+本设计的“完成”是指功能与质量属性的**设计契约可审查**，而不是跨组件组合已经经过验证。尤其需要区分：（1）现有 Manifest 已体现的配置；（2）官方版本直接支持的 API 和机制；（3）本项目要求但尚未实现或尚未证明可由现有扩展点实现的集成行为。
+
+| 待确认项 | 文档已有的设计结论 | 验收限制 |
+|---|---|---|
+| Karmada `ResourceInterpreterCustomization` 多来源识别 | 必须根据当前目标成员/对象身份过滤状态，冲突时不得宣称 Ready | 未确认目标版本的 `statusItems` 可见字段与筛选扩展点，不得标记“可直接由当前 Lua 实现” |
+| ARC Controller/Listener RBAC 最小化 | 必须根据目标版本的真实 API verbs/resources 收敛 | 当前 Controller admin kubeconfig 不符合生产目标；文档不能替代权限实施 |
+| JIT Secret 异步传播与删除 | 依赖 Pod 引用及 Karmada `propagateDeps`，清理需确认成员副本 | 不能推断所有引用形态均自动识别，或跨成员销毁是原子事务 |
+| NPU 容量、拓扑及强隔离 | 设备资源请求、节点可放置性与跨租户硬隔离条件必须满足 | 目前 NPU 功能为候选扩展；设备/沙箱兼容性未经选型，不构成已实现能力 |
+| 关键路径与可用性目标 | 已定义阶段、来源、故障域和诊断契约 | 没有业务批准的时延/恢复阈值，不构成量化性能与可用性验收 |
+
+**最终评审口径**：第 2～5 章设计结构、要求追踪、异常处理与 FMEA 可以通过静态设计检查；涉及上表未确定的技术可实现性、正式指标或实际运行效果，只能标为**待专项选型/接口确认**。不要求开展 PoC，也不以抽象时序图替代上游 API 证据。
 
 **统一资料来源及版本边界**：本文件 3.7 给出 ARC/GitHub Actions、Karmada、Kubernetes 官方文档索引；本仓库现有 Manifest 用于定位配置差异；任何仅有内部运行记录支持、而无上游接口规范支持的声明都应标明为集成设计假设。缺少 PoC 不构成功能设计缺口，但 **SR/接口/异常/DFX 未定义**属于设计缺口。
 
