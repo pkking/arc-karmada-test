@@ -1509,84 +1509,82 @@ sequenceDiagram
 
 **运行诊断与敏感信息处理**：排障时比较目标成员与控制面 Pod 的 UID、容器状态和 Ready 条件。状态来源发生冲突时必须先确认目标成员，不能静默取第一个来源。
 
-## 5.6 F-06 异构 NPU Runner 执行资源适配
+
+## 5.6 F-06 异构 NPU 任务执行资源适配
 
 ### 5.6.1 功能概述
 
-**扩展设计，当前无正式核心 SR**：原候选需求 SR-06-01 暂不纳入第 2.4 节；**用例**：UC-07 请求 NPU Runner 并在兼容节点执行、UC-13 NPU 资源不足或设备插件不可用；**功能域规格**：SP-02、SP-08。仓库当前没有 NPU 资源请求或插件部署配置，本节仅提供未来选型后的实施参考。
+**扩展设计，当前无正式核心 SR**：原候选 SR-06-01 未纳入第 2.4 节；关联 UC-07 NPU 工作流节点调度、UC-13 NPU 资源不足，以及 SP-02、SP-08。当前 Manifest 未配置 NPU 扩展资源或 Dispatcher；本节仅规定联邦与成员的**调度职责**，不设计运行时隔离、设备固件或沙箱。
 
-F-06（扩展）提供 NPU Runner 服务；按设备资源请求，将 Pod 放置到兼容成员。
-
-**职责**：NPU 请求、成员约束、兼容配置；实际设备分配归 Kubernetes/插件。
+F-06 将 NPU 资源需求对应到**成员集群内实际申请 NPU 的 Pod**，保证联邦层选成员、成员层选 Node、kubelet 与设备插件分配设备。
 
 ### 5.6.3 实现思路
 
-Device Plugin 提供资源名和单位；Runner 模板声明请求，Karmada 选成员、kube-scheduler 选节点。设备型号、驱动和运行时由设备规格确定；NPU 不可默认互换。
+**两种工作负载形态必须区分**：在 runner-container-hooks 的 container mode 下，Runner Pod 可以仅使用 CPU，Runner 接收 Job 后 hooks 创建携带 NPU resources 的 workflow Pod；在不使用该模式、Job 直接在 Runner 中执行时，Runner Pod 本身可能需要申请 NPU。Dispatcher 使用声明的需求估算成员容量，但**不以 Runner Pod Ready 证明真实 NPU 已占用**。实际节点放置归成员 kube-scheduler/Volcano，设备分配归 kubelet/Device Plugin。
 
 ### 5.6.4 设计思路
 
-选择 NPU Runner 后，ARC 创建带设备请求的 Pod；Karmada 选成员，Kubernetes 选节点，插件分配设备。设备不足则保持不可调度并报告原因，不得降级为 CPU Runner。
+Dispatcher 依据 NPU 需求和成员容量选择 Cluster，放行 Runner Binding；Karmada 负责 Runner Pod/JIT 依赖传播。成员完成 Runner Pod 调度、Job Pod 创建及 NPU Node 绑定；若节点资源不足，保持实际 NPU Pod Pending，向 Dispatcher 提供后续容量与等待诊断，不自动重派 GitHub Job。必须核实 hooks 是否强制 workflow 与 Runner 同节点；存在同节点约束时不得假设 workflow 可独立选 Node。
 
 #### 5.6.4.1 UC-07 请求 NPU Runner 并在兼容节点执行——运行时序（US-08）
 
-```mermaid
+§§§mermaid
 sequenceDiagram
     autonumber
-    box rgb(232,243,255) 任务与 Runner 模板
-        participant GH as GitHub Actions
-        participant ARC as ARC Controller
-    end
-    box rgb(255,240,222) 联邦和成员调度
-        participant K as Karmada Scheduler
-        participant KS as 成员 kube-scheduler
-    end
-    box rgb(231,249,239) NPU 执行环境
-        participant DP as NPU Device Plugin
-        participant Pod as NPU Runner Pod
-    end
+    participant GH as GitHub / ARC
+    participant D as Dispatcher
+    participant K as Karmada Binding/Work
+    participant MS as 成员 kube-scheduler / Volcano
+    participant R as Runner Pod (通常 CPU)
+    participant W as NPU workflow Pod
+    participant KL as kubelet + Device Plugin
+    GH->>K: 创建 Runner Pod 并形成待放行 Binding
+    D->>D: 排队并按成员资源容量选 Cluster
+    D->>K: 放行 Binding，记录唯一成员
+    K->>MS: 传播 Runner Pod 和 JIT 依赖
+    MS->>R: 选择 Runner Pod 节点并启动
+    GH->>R: Job 分配给已注册 Runner
+    R->>MS: hooks 创建携带 NPU resources 的 workflow Pod
+    MS->>MS: 依据 Node 资源和拓扑 Filter / Score / Bind
+    MS->>W: 绑定实际 NPU Node
+    W->>KL: 已绑定 Pod 触发设备准备
+    KL-->>W: Device Plugin Allocate 暴露设备
+    W-->>GH: 执行 Job 并上报结果
+    Note over D,MS: Dispatcher 选成员/管理预留；成员调度器决定 Node
+§§§
 
-    Note over GH,Pod: 设计路径；设备插件与扩展资源名称由目标硬件选型
-    GH->>ARC: 提交 NPU Runner 标签对应的 Job 需求
-    ARC->>K: 创建声明 NPU 资源请求的 Runner Pod
-    Note over ARC,K: 需要先明确 Runner Pod 的 NPU 资源规格及集群兼容条件
-    K->>KS: 将 Runner Pod 分发到候选成员集群
-    KS->>KS: 依据资源请求、节点标签和可用节点进行调度
-    KS->>Pod: 选择合格节点并绑定 Pod
-    Note over KS,DP: kubelet 在选定节点与 Device Plugin 协作完成设备分配；调度器不直接调用插件
-    DP-->>Pod: 设备通过 kubelet/容器运行时暴露给 Pod
-    Pod->>Pod: 执行 NPU 计算或测试
-    Pod-->>GH: 上报 Job 结果，退出后释放资源
-    Note over K,Pod: 真实 NPU 资源名、设备插件及兼容性由目标硬件选型决定
-```
-
-
+**非 container mode 分支**：若 Job 直接运行在申请 NPU 的 Runner Pod 中，成员调度器直接对该 Runner Pod 完成 NPU Node 绑定；该分支不能假装存在独立 workflow Pod。
 
 #### 5.6.4.2 UC-13 NPU 资源不足——异常运行时序
 
-```mermaid
+§§§mermaid
 sequenceDiagram
     autonumber
-    participant ARC as ARC RunnerSet
+    participant D as Dispatcher
     participant K as Karmada
-    participant Cluster as 成员 Kubernetes
-    participant Plugin as Device Plugin
-    participant Ops as 资源池管理员
-    ARC->>K: 提交带扩展资源请求的 Runner Pod
-    K->>Cluster: 选择候选成员
-    Cluster->>Cluster: kube-scheduler 检查 Node allocatable 和 Pod 资源请求
-    alt 设备资源不存在或不足
-      Cluster-->>Cluster: 无合格节点，FailedScheduling
-      Cluster-->>Ops: Pod Pending / FailedScheduling 可见
-      Note over K,Ops: 不降级运行到无 NPU 的节点
-    else 设备插件与资源就绪
-      Note over Cluster,Plugin: 节点选定后由 kubelet 与 Device Plugin 协作分配设备
-      Cluster-->>ARC: Runner Pod 状态回传
+    participant M as 成员 kube-scheduler / Volcano
+    participant W as 实际 NPU Pod
+    participant Ops as 运维诊断
+    D->>D: 查询成员资源可放置性与预留状态
+    alt 无合格成员
+        Note over D,K: 保留待放行 Binding，分类 NoFeasibleCluster / CapacityUnknown
+    else 已选择成员
+        D->>K: 放行 Runner Binding 至选中 Cluster
+        K-->>M: Runner 到成员，随后实际 NPU Pod 由成员创建
+        M->>M: 检查节点资源与拓扑
+        alt 无可用 NPU Node
+            M-->>W: Pod Pending / FailedScheduling
+            M-->>Ops: 保留 Pod、Node 及设备失败证据
+            Note over D,Ops: Dispatcher 更新后续容量决策；不改变已运行 Job
+        else 节点可放置
+            M-->>W: Bind Node，kubelet/Device Plugin 分配设备
+        end
     end
-```
+§§§
 
 ### 5.6.5 用户接口设计
 
-通过独立 `runs-on` 名称选择 NPU 服务；需说明设备与软件栈约束。无新增 UI。
+开发者通过原有 `runs-on` 选择 NPU 服务，无需指定成员或 Node。运维按 GitHub 排队、Dispatcher Binding hold、成员 NPU Pod Pending 分阶段定位等待。无新增 UI。
 
 ### 5.6.6 实现接口设计
 
@@ -1594,33 +1592,34 @@ sequenceDiagram
 
 | 交互双方 | 原生接口或资源 | 输入、操作与输出 | 权限与前置条件 | 异常处理与限制 | 依据及规格 |
 |---|---|---|---|---|---|
-| 工作流使用者与 NPU Runner 服务 | GitHub Actions `runs-on` | 开发者必须选择明确标注 NPU 能力的 Runner 服务名称。 | 目标仓库必须获得相应服务的使用授权。 | 没有匹配的服务时，按 GitHub 队列机制显示状态；不得改选普通 CPU Runner。 | ARC-1；SP-08 |
-| Runner Pod 与成员 Kubernetes | `Pod.spec.containers[].resources` | Pod 必须声明实际设备插件提供的扩展资源名称和数量，并配置必要的节点约束。 | 成员必须安装与所选设备相符的插件、驱动和运行时。 | 资源不足时保持 Pending 并记录调度原因，不得删除 NPU 请求。 | K8S-3；SP-08 |
-| Karmada 传播策略与成员候选集 | `PropagationPolicy.spec.placement` | 传播策略必须把 NPU Runner Pod 分发到满足设备与隔离条件的成员。 | 平台必须提供正确的成员标签及资源条件。 | 无合格成员时保留不可调度原因，不得分发到不兼容集群。 | KAR-1；SP-02、SP-08 |
+| 工作流与 Runner 服务 | GitHub Actions `runs-on`、ARC RunnerSet | 服务类型与实际 NPU 工作负载需求匹配；保持用户标签不变。 | 仓库获得服务授权。 | 无服务时由 GitHub 排队，不自动降级 CPU。 | ARC-1；SP-01、SP-08 |
+| Dispatcher 与 Karmada | Runner `ResourceBinding`、成员资源状态 | Dispatcher 选 Cluster 并放行 Binding；Karmada 分发 Runner Pod 和依赖。 | 单一 Binding 写入者；服务与成员授权一致。 | 无可接纳成员保留等待，不设 NodeName，不重复创建 Job。 | KAR-1；PL-D02 |
+| 成员调度器与实际 NPU Pod | `Pod.spec.containers[].resources`、`Pod.spec.schedulerName`、节点约束 | workflow Pod（或直接执行的 Runner Pod）声明 NPU 扩展资源；成员调度器选 Node。 | 资源名由设备插件发布；hooks 同节点限制已查明。 | FailedScheduling 由成员报告，不以 Karmada 成员放置成功替代 Node 绑定。 | K8S-3；SP-08 |
+| kubelet 与 NPU Device Plugin | Device Plugin API | 在已绑定 Node 上完成设备 Allocate 并向容器暴露设备。 | 设备已注册且健康。 | 设备异常不得移除资源请求或改用 CPU 运行。 | K8S-3；SP-08 |
 
-**开发交付边界**：开发人员在 Runner Pod 模板及传播策略中配置扩展资源请求和目标成员条件；具体值必须来源于选定的设备插件和设备兼容清单。
+**设计边界**：NPU 扩展资源名、workflow/Runner 真实 Pod 模板、hooks 是否强制同节点、成员 Scheduler 类型及设备拓扑为 P 类输入；不能据此声称目标方案已部署。
 
 ### 5.6.9 DFX分析
 
-**功能安全与性能约束**：目标 NPU 的驱动、资源隔离、并发容量和租户权限应由设备管理员提供。没有真实负载指标时，不能写入性能改善百分比或设备共享保证。
+**性能与可靠性**：分开观测 Dispatcher 等待、Runner 供给/注册、实际 NPU Pod 从创建到 PodScheduled 的等待，以及设备准备。保护队首的节点预留只影响成员可用容量与调度约束，**不等于 Node Bind**。
 
 **可靠性故障分析（FMEA）**
 
 | 编号 | 失效原因 | 业务或系统影响 | 检测方法 | 处理与恢复要求 | 负责方 |
 |---|---|---|---|---|---|
-| F06-01 | Runner 请求的资源名称与插件发布的名称不同。 | Runner Pod 无法匹配需要的 NPU 资源。 | 比较 Pod 资源请求与 Node `status.allocatable`。 | 资源池维护者应按插件正式资源名修正服务模板。 | 设备与平台维护者 |
-| F06-02 | 设备驱动、固件或容器运行时不兼容。 | Runner 容器启动失败，或者 NPU 作业执行失败。 | 检查节点事件、容器退出原因及设备运行环境版本。 | 设备维护者按厂商兼容资料调整镜像、驱动及运行时版本。 | 设备与运维维护者 |
-| F06-03 | NPU 设备资源耗尽或候选成员不可达。 | Pod 不能调度，GitHub Job 需要等待可用 Runner。 | 检查 Karmada 目标成员、Node allocatable 与 `FailedScheduling` 事件。 | 平台必须报告资源不足并维持 NPU 约束，不能改用普通 CPU 节点。 | 调度与资源池维护者 |
+| F06-01 | 实际 NPU Pod 的资源名称或单位与 Device Plugin 不一致。 | NPU Pod 无法调度。 | 比对 workflow/Runner Pod requests 与 Node allocatable。 | 修正实际 NPU Pod 模板；不改动资源请求以绕过失败。 | 设备与服务维护者 |
+| F06-02 | hooks 强制 workflow 与 Runner 同节点，所选 Runner Node 没有 NPU。 | workflow Pod 长期 Pending 或放置失败。 | 检查 `nodeName`、required NodeAffinity、hooks 版本及 Pod 事件。 | 明确解除节点耦合或采取受约束放置路径；不把普通成员放置判断当 Node 保证。 | Hooks 与调度维护者 |
+| F06-03 | Dispatcher 估计可行，成员实际资源发生竞争或设备变为不可用。 | 已放行 Runner 但 NPU Pod Pending，Job 等待增加。 | 比较 Binding/容量账本、成员 FailedScheduling、Node 设备状态。 | 成员继续原生调度，Dispatcher 更新容量与后续放行；不额外重派 Job。 | Dispatcher 与成员调度维护者 |
 
-**风险—措施—验证追踪**（关联：扩展候选：非本期正式 SR；SP-08；延续上方 FMEA 编号，不替代已有故障表）
+**风险—措施—验证追踪**
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
-| F06-01 | 扩展资源名或设备数量配置错误 | NPU Pod 无法调度 | 中 | SP-08 使用 Device Plugin 发布的实际资源名/数量与硬件服务目录 | 资源不存在时保持 Pending/FailedScheduling，不删除请求 | 设备插件及资源名称随目标硬件选型变化 |
-| F06-02 | 驱动/Runtime/镜像不兼容 | NPU 任务无法运行或错误结果 | 高 | SP-08 建立架构、驱动、固件、容器 Runtime 兼容约束 | 设计中逐项列出版本兼容条件，不把 Pod Running 当作计算成功 | 需具体设备厂商兼容资料 |
-| F06-03 | NPU 容量耗尽/拓扑不满足 | 持续排队或 Pending | 高 | PL-04/05 不拼接多节点空闲资源，不将单成员候选等同真实可调度 | 检查 Node allocatable、资源请求、拓扑及 FailedScheduling；不得回退 CPU | 容量公平与预留功能不在当前原生方案保证范围 |
+| F06-01 | NPU resources 不一致 | Pending / FailedScheduling | 高 | SP-08 绑定真正 NPU Pod 的资源声明与设备插件名称 | 请求与 Node allocatable 的资源单位一致；失败不得降级 | 设备型号配置漂移 |
+| F06-02 | Runner/workflow 强制同节点 | 消除成员 NPU 可放置性 | 高 | PL-D02：按 hooks 版本确定耦合分支 | 有/无同节点约束时分别能指出成员内 Node 选择路径 | 当前 hooks 部署模式待确认 |
+| F06-03 | 容量快照与成员实时状态不同步 | NPU 任务等待 | 高 | PL-D02 容量账本/预留与成员调度事实对账 | 不把预留 Node 当已绑定；Pod Pending 有独立诊断 | 资源竞争、成员状态延迟 |
 
-**运行诊断与敏感信息处理**：平台应保留 Node allocatable、Runner Pod 的资源请求、成员调度结果和 FailedScheduling 事件。设备异常时，不得通过删除 NPU 请求使错误任务运行在 CPU 节点。
+**运行诊断**：必须区分 CPU Runner Pod 与真正申请 NPU 的 workflow Pod（或直接 NPU Runner Pod），记录 NPU Pod UID、节点资源申请、PodScheduled、Device Plugin 事件及关联 Runner/Binding。不得把 CPU Runner 已就绪当作 NPU 容量已分配。
 
 ## 5.7 跨功能时序与接口契约
 
