@@ -443,7 +443,7 @@ erDiagram
 
 ### 4.3.1 实现思路
 
-Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner Pod 只在一个成员运行（D），成员 Kubernetes 选节点。`propagateDeps` 传播 JIT Secret 等引用依赖。Pod 与 Secret 异步到达；必需的 Secret 未就绪时，容器不能启动。
+现有 `PropagationPolicy` 指定候选成员并由 Karmada 调度（U）；目标 Dispatcher 选择唯一成员并放行 Binding（D），成员 Kubernetes 选节点。`propagateDeps` 传播 JIT Secret 等引用依赖。Pod 与 Secret 异步到达；必需的 Secret 未就绪时，容器不能启动。
 
 ### 4.3.2 实现设计
 
@@ -525,7 +525,7 @@ Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner P
 | 成员节点调度 | **成员 kube-scheduler 或 Volcano** | 按实际 NPU workflow Pod 的 resources、NodeAffinity、污点/容忍、拓扑及节点状态过滤/评分/绑定 | 不改跨成员 Runner 队列顺序和成员选择 |
 | 设备分配 | **成员 kubelet + NPU Device Plugin** | 设备插件向 kubelet 发布扩展资源；节点绑定后由 kubelet 协同设备插件分配设备 | 设备插件不替 Karmada 选成员 |
 
-**成员容量上报不等于节点选定**：Dispatcher 需要判断成员能否运行完整的 NPU 请求，必要时参考该成员的 **Node/Pod 快照或 Karmada Scheduler Estimator** 获得单节点可放置性与拓扑约束，而不是只看 Cluster 聚合空闲卡数。Dispatcher 可基于候选节点估算进行**资源账本与预留**，但它记录的节点是容量保护目标，不是对 workflow Pod 的最终节点绑定；由成员调度器保留实际 Filter/Score/Bind 决策权。Estimator 对厂商 NPU 拓扑和实际工作负载的覆盖需核对锁定版本。
+**NPU 需求声明与容量证据**：当 Runner Pod 本身不申请 NPU，Runner 服务必须向 Dispatcher 提供可核对的预期 NPU 类型和数量（例如 Runner 规格/元数据经资源解释器形成的需求），不能从 CPU Runner Pod 的 requests 推断未来 workflow Pod 的 NPU 需求。**成员容量上报不等于节点选定**：Dispatcher 需要判断成员能否运行完整的 NPU 请求，必要时参考该成员的 **Node/Pod 快照或 Karmada Scheduler Estimator** 获得单节点可放置性与拓扑约束，而不是只看 Cluster 聚合空闲卡数。Dispatcher 可基于候选节点估算进行**资源账本与预留**，但它记录的节点是容量保护目标，不是对 workflow Pod 的最终节点绑定；由成员调度器保留实际 Filter/Score/Bind 决策权。Estimator 对厂商 NPU 拓扑和实际工作负载的覆盖需核对锁定版本。
 
 **单一调度决策者**：Runner Binding 使用经版本验证的 `spec.schedulerName` 指向 Dispatcher；普通 Karmada Scheduler 不应同时修改该 Binding 的 `spec.clusters`。Dispatcher 按队列策略持有或放行 Binding，放行后由 Karmada 原生控制器创建 Work。不能用 Karmada 的普通 Filter/Score 插件替代跨 Runner 的 FIFO、等待与回填，也不能用 `Divided/Weighted` 宣称跨独立 Pod 均匀调度。对 Karmada failover、descheduler 与应急调度器是否会修改同一 Binding，须定义互斥、接管和恢复规则。
 
@@ -745,9 +745,9 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 
 | 配置项 | 参数来源 | 规定的行为与限制 |
 |---|---|---|
-| NPU 扩展资源名 | 目标设备插件发布的 Kubernetes 资源定义。 | Runner Pod 必须使用插件实际发布的扩展资源名称。不得假定所有设备都使用 `npu`。 |
-| 设备份额与数量 | 设备插件定义的资源单位与可共享规则。 | 平台必须按插件支持的分配单位设置请求数量。没有厂商资料时不得承诺共享或超额分配。 |
-| 成员/节点标签 | 资源池配置、成员标签及节点标签。 | Karmada 应选合格成员，成员调度器再按资源请求和节点约束选节点。两层约束必须一致。 |
+| NPU 扩展资源名 | 目标设备插件发布的 Kubernetes 资源定义。 | **真正申请 NPU 的 Pod** 必须使用插件发布的扩展资源名称；container mode 通常是 workflow Pod，不是 CPU Runner Pod。 |
+| 设备份额与数量 | 设备插件定义的资源单位与可共享规则。 | Dispatcher 的任务容量声明必须能映射到实际 NPU Pod requests；成员调度器按插件支持的分配单位判定节点容量。 |
+| 成员/节点标签 | 资源池配置、成员标签及节点标签。 | Karmada + Dispatcher 控制成员候选和放行；成员 kube-scheduler/Volcano 对实际 NPU Pod 选择节点。 |
 | 镜像/驱动/Runtime | 设备驱动、固件和容器运行时的兼容资料。 | 部署方必须核对 Runner 镜像与目标设备的兼容性；不能因为安装了设备插件就推定全部软件栈可用。 |
 | Runner Scale Set | 服务目录及 GitHub 工作流标签。 | 硬件能力不能互换时，平台必须配置不同 Runner 服务，不能默默把 NPU Job 交给普通 CPU Runner。 |
 
@@ -1100,7 +1100,7 @@ F-03 将 Runner Pod 与临时注册凭证分发至合格成员，并接收传播
 
 ### 5.3.3 实现思路
 
-`PropagationPolicy` 定义 Runner Pod 选择器和候选成员；`propagateDeps` 下发 JIT Secret。标签须匹配目标 ARC 版本。Karmada 选成员、Kubernetes 选节点；不另建 GitHub 调度器。`Divided/Weighted` 不保证独立 Pod 逐轮均分。
+`PropagationPolicy` 定义 Runner Pod 选择器及候选成员，`propagateDeps` 下发 JIT Secret。目标 Dispatcher 根据跨成员队列和资源事实选择成员、放行 Binding；成员 kube-scheduler/Volcano 负责 Node 绑定。GitHub Job 队列保持原样。`Divided/Weighted` 不保证独立 Pod 逐轮均分。
 
 ### 5.3.4 设计思路
 
@@ -1629,10 +1629,10 @@ sequenceDiagram
 |---|---|---|---|
 | F-01 统一 Runner 服务；UC-01/02 | GitHub 仓库/组织授权；workflow `runs-on` 与 `AutoscalingRunnerSet.spec.runnerScaleSetName` 匹配；Scale Set、凭证与 Listener 可用 | GitHub 匹配 Job，Listener 接收需求，ARC 调谐期望 Runner；输出服务匹配及需求状态 | 未匹配/未授权时按 GitHub 原生队列与报错处理；不得自动改写标签或跨授权服务降级；重试提交工作流不属于集成层能力 |
 | F-02 按需供给与回收；UC-03/04 | Listener 收到 GitHub 的 Job Available 信息；ERS、ER、JIT 和 Controller 权限满足 ARC 版本要求 | Listener 经 K8s API 更新 ERS；ARC 的 ER/Pod/JIT 依版本原生机制调谐；Job 结束后的删除由 ARC/Karmada 分别完成 | 创建失败、Pod Failed、注册失败和删除滞后分开记录；重复 Watch 不能自行生成额外 Job；删除 API 成功不等于成员清理完成 |
-| F-03 联邦放置及依赖；UC-05/06/10 | Pod 被精确的 PropagationPolicy 选择、成员获得授权；Pod.spec 引用 JIT Secret | Karmada Detector/Scheduler/Binding/Work 定位目标成员并传播；成员 kube-scheduler 放置节点；输出成员关联、Pod 和依赖传播状态 | 无合格成员、成员失联、Secret 晚到时保留调度/挂载错误；不得扩张授权成员、修改设备请求或重派 GitHub Job |
+| F-03 联邦放置及依赖；UC-05/06/10 | Runner Pod 匹配 PropagationPolicy、成员授权明确；Dispatcher 获得任务 NPU 规格与容量证据 | Dispatcher 决定 Cluster、持有或放行 Runner Binding；Karmada Work 分发 Runner 及 JIT；成员调度器为实际 NPU Pod 选择 Node | 无容量时 hold；不得扩张授权成员、复制 Runner 或重派 GitHub Job；成员失败由成员调度事实诊断 |
 | F-04 Listener 跨控制面认证；UC-08/11 | CA/SAN、有效 Token、受限 RBAC、正确 Karmada API endpoint | Listener 通过认证和授权后对目标 ERS/ER 执行所需 API 操作；输出 API 返回值与非敏感审计记录 | DNS/TCP、TLS、401、403、资源版本冲突分别处理；仅对授权资源重新读取并重试；轮换必须核实新凭证加载与旧身份失效 |
 | F-05 状态反馈；UC-09/12 | 控制面 Pod 与当前 Binding/Work 可关联；成员 Pod 身份及状态可信 | Karmada 汇总成员 `Pod.status`；ARC 读取必要 `conditions`、`containerStatuses`；输出控制面可见状态 | 当前 Lua 只支持唯一可信状态来源；多来源/过期状态不能取首个非空；重复和乱序事件按 UID/目标 Cluster 核对，不伪造 Ready |
-| F-06 NPU 扩展；UC-07/13 | **非本期正式 SR**；选定设备插件发布的扩展资源名、数量、成员/节点约束及兼容环境 | ARC Runner Pod 模板携带扩展资源请求；Karmada 选成员，成员 kube-scheduler/kubelet/设备插件分配资源；输出 Pod 调度状态 | 设备不足或插件不可用时保持 Pending/异常；不得将单节点所需 NPU 跨成员拼接、移除资源请求或自动降级 CPU |
+| F-06 NPU 扩展；UC-07/13 | **非本期正式 SR**；确认实际申请 NPU 的 Pod（workflow 或 Runner）、扩展资源名和成员/节点约束 | Karmada + Dispatcher 选择成员；成员 kube-scheduler/Volcano 选择 Node；kubelet/Device Plugin 实际分配设备 | NPU Pod 资源不足则 Pending；不得跨成员拼接、移除资源请求或自动降级 CPU |
 
 **接口调用语义与真实上游分工**：
 
