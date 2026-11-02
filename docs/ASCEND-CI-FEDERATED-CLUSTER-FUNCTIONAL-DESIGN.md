@@ -560,7 +560,7 @@ sequenceDiagram
         B->>M: Work 分发，成员执行最终节点绑定
         M-->>KS: 调度事实供容量对账与诊断
     else 全部不满足或容量事实未知
-        KS-->>ARC: 通过原生 Binding/Pod 可观测状态呈现等待原因
+        Note over KS,ARC: 等待原因保留在 Karmada 调度事件与 Binding/Pod 诊断，不假定 Scheduler 直接调用 ARC
         Note over ARC,KS: 设计分类 NoFeasibleNode/CapacityUnknown，非上游原生枚举
     end
 ```
