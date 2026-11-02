@@ -1597,7 +1597,7 @@ sequenceDiagram
 | 成员调度器与实际 NPU Pod | `Pod.spec.containers[].resources`、`Pod.spec.schedulerName`、节点约束 | workflow Pod（或直接执行的 Runner Pod）声明 NPU 扩展资源；成员调度器选 Node。 | 资源名由设备插件发布；hooks 同节点限制已查明。 | FailedScheduling 由成员报告，不以 Karmada 成员放置成功替代 Node 绑定。 | K8S-3；SP-08 |
 | kubelet 与 NPU Device Plugin | Device Plugin API | 在已绑定 Node 上完成设备 Allocate 并向容器暴露设备。 | 设备已注册且健康。 | 设备异常不得移除资源请求或改用 CPU 运行。 | K8S-3；SP-08 |
 
-**设计边界**：NPU 扩展资源名、workflow/Runner 真实 Pod 模板、hooks 是否强制同节点、成员 Scheduler 类型及设备拓扑为 P 类输入；不能据此声称目标方案已部署。
+**开发交付边界**：本节仅定义架构接口；NPU 扩展资源名、workflow/Runner Pod 模板、hooks 同节点条件、成员 Scheduler 类型及设备拓扑为 P 类输入，待后续设计确认，不宣称目标方案已部署。
 
 ### 5.6.9 DFX分析
 
