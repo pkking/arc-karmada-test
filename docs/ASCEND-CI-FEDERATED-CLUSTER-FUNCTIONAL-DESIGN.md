@@ -485,6 +485,29 @@ Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner P
 
 **验收性设计检查**：针对授权/未授权成员、无候选成员、成员空闲但节点碎片化、JIT Secret 晚到、节点设备不足、成员故障六类场景，应能从本章规则唯一确定职责和允许/禁止的处理动作；这是一组文档检查场景，不要求在 T1 执行测试。
 
+
+### 4.3.4 独立 Runner 放置失败的决策与降级（PL-D01）
+
+**设计决策（D）：单 Runner Pod、单目标成员；已创建 Runner 不自动跨成员重放。** 当前功能域选择安全的原地等待与故障诊断，允许后续新建 Runner 按更新后的合格成员策略放置；不把已有 Runner Pod 的重绑定等价于新作业重试。原因是 GitHub Job 分配、ARC Runner 生命周期、Karmada Work 与成员 Pod 不共享原子事务，也没有跨域 exactly-once 保证。
+
+| 候选方案 | 优点 | 不采用或采用的理由 |
+|---|---|---|
+| A：放置失败立即将同一 Runner 复制到其他成员 | 潜在降低等待 | 旧成员可能仍运行；JIT 注册与 Job 关联未确认，存在双执行和凭证扩散风险；**不采用** |
+| B：已放置 Runner 保留单目标，等待原生调谐；新 Runner 使用最新策略 | 保持所有权与任务身份，避免引入平台重派协议 | 可能因放错成员而持续 Pending；**当前采用** |
+| C：增加跨成员准入与安全重选控制器 | 可向容量感知与受控迁移演进 | 必须先定义节点拓扑快照、保留/释放、任务身份、撤销及幂等协议；**本子系统当前不实现** |
+
+| 触发场景 | 决策主体和权威事实 | 设计响应 | DFX 出口 |
+|---|---|---|---|
+| 策略不匹配或无授权成员 | Karmada Policy/Binding | 保持不可放置；禁止扩大租户候选集 | 说明策略拒绝原因；不生成替代 Job |
+| 成员 A 被选中，但所有节点都无法容纳完整 NPU 请求；成员 B 有合格节点 | 成员 kube-scheduler 的 FailedScheduling 为实际节点结论；Karmada Binding 为当前成员决定 | A 上的已有 Pod 保持 Pending；**不得宣称自动改选 B**；后续新 Runner 可以由更新后的策略选择 B | 记录 A 的绑定及节点失败证据、B 的可用性事实；公开有效容量缺口 |
+| 多个 Pod 同时竞争同一空闲资源 | 成员 kube-scheduler 实际调度结果 | 不凭异步成员容量快照作原子预留；先到的 Binding 不等于设备已占用 | 记录每个 Pod 的目标、实际 Node 与失败事件 |
+| 已放置成员失联，Runner 是否注册/Job 是否启动未知 | GitHub Job/Runner、ARC ER、Karmada Binding、成员 Pod 各有事实权威 | 进入 **ExecutionUnknown** 诊断状态；平台不得复制同一个 Runner 或自行重新派发 Job | 旧成员销毁未确认、JIT 副本未确认时保留高风险告警 |
+| 有明确证据 Runner 未注册且旧实例已删除 | ARC 的 Runner 生命周期与成员副本清理事实 | 仍按 **ARC/GitHub 官方机制**产生后续实例；不得把 Karmada 重定位视为同一 Job 的安全重试 | 关联新旧 Runner 身份；禁止复用过期 JIT |
+
+**容量语义**：合格成员数、成员可用卡数、**单节点可放置的完整资源请求**、Runner 并发上限分别记录；跨成员空闲卡数之和不构成放置成功保证。该设计**不满足**“有任意合格空闲节点时旧 Pod 必然自动重选成功”的强 SLO；若业务批准此要求，必须新增独立的准入/重选规格，不可用 `Divided/Weighted` 替代。
+
+**故障迁移边界**：Karmada 的 `PropagationPolicy.spec.failover` 是可选机制；官方文档对其迁移保证主要以可管理副本工作负载说明。即使目标版本支持某种 Pod 迁移，也不能推出 GitHub Job 与 ARC Runner 的安全切换。当前不启用对已创建 Runner 的自动跨成员 failover。验收只检查策略、对象身份与异常决策链，不进行 PoC。[Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)；[Failover Analysis](https://karmada.io/docs/next/userguide/failover/failover-analysis/)。
+
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
 
 ### 4.4.1 实现思路
@@ -544,6 +567,28 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 - SEC-06：成员失联时 Secret 副本存在性、删除及远端授权状态均记为未知，不伪造已撤销结论。
 
 **范围边界**：这里定义所需安全机制及校验要求，**不声称当前 Manifest 已满足**；对应实施变更及自动轮换能力不是 T4 的代码交付。
+
+
+### 4.4.5 不可信开源 PR 的隔离与准入决策（SEC-D01）
+
+**目标要求（D）**：未来必须能够在物理 NPU 共享资源池执行不可信开源 PR，但**共享资源不等于允许不同信任主体直接共享宿主机内核和 NPU 驱动攻击面**。信任边界同时覆盖 GitHub 事件与仓库授权、ARC 管理凭证、Karmada 成员控制面、Runner 沙箱、NPU/驱动、模型/构建缓存与网络出站。
+
+| 方案 | 隔离边界与风险 | 决策 |
+|---|---|---|
+| 普通 Pod + namespace/RBAC/NetworkPolicy | 提供 API、网络和一定运行时约束；不同 Pod 仍共享宿主内核与 NPU 驱动 | **不能作为不可信 PR 在共享物理 NPU 节点上的唯一隔离措施** |
+| 按信任域独占物理节点或集群 | 避免在同一物理节点并置不可信租户；仍需隔离控制面、网络及缓存 | **不满足共享节点终态，但作为强隔离未就绪时的保守执行路径** |
+| 具备 NPU 设备隔离能力的 VM-backed Runner 沙箱或等效硬隔离 | 可隔离访客内核；仍依赖 IOMMU/设备直通或虚拟化、驱动、固件及复位能力 | **目标架构选择方向**；按 Ascend 型号及 CCE/其他 Kubernetes 运行环境确认可实现性 |
+
+**准入不变量：**
+- SEC-D01-A：根据 GitHub 事件、仓库与发布者信任等级决定 Runner 服务范围；`runs-on` 标签本身**不是授权或可信来源**。不可信 PR 不得经特权 `pull_request_target` 等入口直接获得管理域凭证。
+- SEC-D01-B：平台为不可信工作流分离 Runner 服务、身份/Secret、执行池和缓存权限。Karmada 候选策略用于放置，实际 Node 隔离与 Pod 安全约束需由成员准入控制及节点配置执行；不能将标签或 `PropagationPolicy` 视为安全边界。
+- SEC-D01-C：在共享物理 NPU 节点开放不可信 PR 前，必须有可审查的 **NPU 型号 × 驱动/固件 × Runtime/VM 沙箱 × 设备暴露/复位 × 控制面隔离**兼容矩阵，以及跨租户内存/设备访问风险的处置结论。CCE 的 vNPU 资源分割**不能直接证明**主机内核或租户间强安全隔离。
+- SEC-D01-D：无法证明共享节点满足上述隔离要求时，**拒绝在共享节点放置不可信 PR**；仅在已划分的独占物理隔离域执行，若无该资源则保持排队/拒绝准入，不通过降级成普通容器或更改 NPU 请求来绕过。
+- SEC-D01-E：每个 Runner 最小权限、默认不挂载 K8s Token、JIT 限目标成员，不能持有 GitHub 主凭证；限制特权容器、宿主设备、持久卷/缓存、任意公网与云凭证访问，并保留独立审计。
+
+**选型边界**：`CCE vs openFuyao/其他集群` 是部署平台选型，不替代 VM 沙箱和 NPU 设备隔离能力决策；缺少某机型的官方兼容证据时标记为技术准入未满足，而非已实现。静态设计验收应能识别一个未授权 PR、一个缺少隔离能力的 NPU 成员及一个凭证/缓存越界场景，并分别给出拒绝原因和责任组件。**本次不修改 Manifest，不声称沙箱已部署。**
+
+**依据**：[Kubernetes Multi-tenancy / Sandboxing](https://kubernetes.io/docs/concepts/security/multi-tenancy/)；[CCE AI Suite (Ascend NPU)](https://support.huaweicloud.com/usermanual-cce/cce_10_0239.html)；[CCE NPU 静态虚拟化限制](https://support.huaweicloud.com/intl/zh-cn/usermanual-cce/cce_10_0994.html)。
 
 ## 4.5 SP-06/SP-07 状态与生命周期规格设计
 
@@ -618,6 +663,34 @@ stateDiagram-v2
 | 事件重复、乱序、旧资源同名重建 | 核对来源 Cluster、UID 与当前权威快照；旧事件不覆盖新对象 | 不跨集群比较 resourceVersion |
 
 **上游边界**：ARC 官方机制本身可能重试失败的 Runner Pod；这里禁止的是额外集成逻辑擅自重放 GitHub Job，而非禁止上游机制。具体超时值及重试限制必须对齐目标 ARC 版本，不在设计中杜撰统一 SLA。
+
+
+### 4.5.5 多来源状态仲裁的设计取舍（ST-D01）
+
+**设计决策（D）**：只接受一个活动成员目标与一个可识别的状态来源；不支持同一个 Runner 实例在不同成员间带 Job 迁移。区分**控制面 Pod.status 给 ARC 读取**与**平台诊断系统的可信状态判定**，二者不能因文字约束而被假定自动一致。
+
+| 方案 | 评价 | 结论 |
+|---|---|---|
+| 任取 `statusItems` 第一个非空 `status` | 最少修改，但来源冲突/旧 Work 可能制造伪 Ready | **仅当前单来源前提下有效；不是多来源仲裁算法** |
+| 在 Lua `AggregateStatus` 内按 `clusterName` 过滤 | 聚合条目携带成员信息，但 Lua 是否能得到**当前唯一 Binding 目标/UID**须以锁定版本的 API 为准 | **不以未经确认的输入宣称可实现** |
+| 先由 Karmada 原生 Binding/Work 确定活动目标，再将成员状态与 Pod 身份比对 | 能区分传播目标、同步状态、成员实际就绪与旧实例 | **选为目标的状态仲裁契约**；若目标版本仅有 Lua 且无法获得身份输入，应使用独立状态观察/适配扩展点，而非伪造字段 |
+
+**状态仲裁输入与输出：**
+1. 输入以 `Cluster + namespace + name + UID` 标识控制面 Pod、成员 Pod 与 Work/Binding；以 GitHub `run_id/job_id/attempt` 和 ARC ER/Runner ID 追踪业务实例。使用实际可提供的 API 字段和事件构建关联，不以同名 Pod 推断 UID 相同。
+2. 按当前活动 Binding/Work 取得**唯一目标成员**；只认可与该目标成员及当前 Pod 实例一致的 `AggregatedStatusItem.clusterName/status` 和成员侧 Pod 快照。
+3. 目标成员唯一且状态来源一致时，可判定 `MemberReady`；目标丢失、多个来源、成员失联、旧 UID 或超出批准的新鲜度阈值时，平台判定 `StatusUnknown`，不推导 `JobCompleted`、`RunnerRegistered` 或可安全迁移。
+4. **重要限制**：如果已有控制面 Pod.status 仍缓存旧 Ready，平台的 `StatusUnknown` 诊断结论**不会自动覆盖 ARC 对该 Pod 的读取**。要对 ARC 做出“绝不接收旧 Ready”的强保证，必须锁定可实施的状态覆盖/准入扩展机制；当前组合未证明这一点，禁止宣称运行时保证已达成。
+
+| 反例 | 必须给出的设计判断 | 禁止行为 |
+|---|---|---|
+| 成员 A Ready，旧 Work 未清，Binding 指向 B | 发生身份与目标冲突，结果 `StatusUnknown` | 取 A 的首个非空状态 |
+| A 曾 Ready，随后成员失联，聚合状态未刷新 | 诊断状态过期；ARC 读到旧 Ready 的风险保留为未闭环的运行时限制 | 仅凭旧 Ready 承诺 Runner 可接单 |
+| GitHub Job 完成，成员 Pod 仍存在 | GitHub 结果完成、资源清理未知分别记录 | 以 Job 完成判定 JIT Secret 已销毁 |
+| 同名 Pod 删除后重建，UID 改变 | 旧事件不属于新实例 | 用同名和跨集群 resourceVersion 合并事件 |
+
+**落地接口分界**：Karmada 的 `AggregatedStatusItem` 包含 `clusterName` 与 `status`；`ResourceInterpreterCustomization.AggregateStatus(desiredObj, statusItems)` 只声明这两类输入，**不提供直接读取当前 Binding 的保证**。在锁定 API 版本并证明聚合阶段具有必要身份输入前，保留“单成员、无自动重定位”的功能域约束。任何升级到状态驱动的自动切换，必须先完成状态仲裁扩展点与 ARC 读状态路径的设计评审。
+
+**依据**：[Karmada ResourceInterpreterCustomization API](https://github.com/karmada-io/karmada/blob/master/pkg/apis/config/v1alpha1/resourceinterpretercustomization_types.go)；[Karmada AggregatedStatusItem API](https://pkg.go.dev/github.com/karmada-io/karmada/pkg/generated/applyconfigurations/work/v1alpha1)；[Karmada Customizing Resource Interpreter](https://karmada.io/docs/userguide/globalview/customizing-resource-interpreter/)。
 
 ## 4.6 SP-08 NPU 资源规格设计
 
@@ -699,6 +772,22 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 **官方机制依据**：[GitHub ARC runner scale-set 容量配置](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Kubernetes Scheduling Framework](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/)、[Pod Conditions](https://kubernetes.io/docs/concepts/workloads/pods/pod-condition/)。上游分别约束 Runner 规模及节点调度/状态语义，**不构成 ARC + Karmada 整体性能或故障切换承诺**。
 
 F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复和责任。未确认的性能、设备、安全参数标待定，不编造数值。
+
+
+### 4.7.4 DFX 场景—架构机制—设计验证矩阵
+
+本节描述**可静态评审的架构响应**。不将未批准的故障检测、重试、数据保留或性能分位数填写为既成数值。质量指标的目标值仍由 SR-NF 与 P-SR 参数批准后约束。
+
+| 场景/质量属性 | 刺激与环境 | 架构响应与负责组件 | 设计判据、残余风险与追踪 |
+|---|---|---|---|
+| QA-01 性能/容量 | A 的节点 NPU 碎片化，B 有完整可用节点；Runner 已绑定 A | Karmada 保留放置决策；成员 kube-scheduler 维持 Pending；平台诊断提出未来新任务策略调整 | 不声称已绑定 Runner 自动迁至 B；记录 Binding/Node 事实；**等待延长风险保留**；PL-D01、F03-03、SR-NF-05 |
+| QA-02 可靠性/可用性 | Runner 运行期间成员失联，Job 终态不可得 | ARC/GitHub 维持原生生命周期；平台仅标记 ExecutionUnknown，不主动重派 | 没有双实例的**集成层额外创建动作**；上游重试行为另按协议评审；PL-D01、LC-07、SR-NF-03 |
+| QA-03 状态正确性 | 旧 A 的 Ready 与新 B 状态冲突 | Karmada Binding/Work 提供目标事实；状态仲裁以成员和 UID 校验，诊断 StatusUnknown | 当前 Lua 不能证明已有缓存 Ready 不被 ARC 读取；这是**显式保留的高风险可实现性缺口**；ST-D01、F05-02 |
+| QA-04 安全性 | 不可信 PR 尝试落到与其他租户共享的物理 NPU 节点 | GitHub/平台服务授权与成员准入约束选池；隔离能力不足时拒绝共享节点放置 | 需要设备/VM 隔离兼容矩阵和真实准入机制；普通 Pod/RBAC 不等于硬隔离；SEC-D01、F03-04、SR-NF-01/02 |
+| QA-05 可服务性 | Secret 晚到、成员失联或 JIT 删除滞后 | ARC/Karmada/成员各保留 UID、事件和清理来源，平台逐对象关联 | 未确认删除标记 CleanupUnknown，缺失 ID 不猜测；LC-05/06、SR-NF-04 |
+| QA-06 可维护性 | 升级 ARC/Karmada 后聚合字段或权限变更 | 目标版本 API/CRD 与 Manifest/身份权限对照；不凭 `next` 文档作为版本承诺 | 版本未锁定前不能完成实现级兼容性验收；SP-05/06、SR-NF-08 |
+
+**可评审性门槛**：每项场景必须指出输入事实、决策归属、响应、禁止动作、可追踪对象和残余风险。设计闭环不表示**共享 NPU 强隔离已具备**、**旧 Ready 对 ARC 的影响已被消除**或**有空闲节点即可即时跨成员放置**。这三项仍是后续技术接口确认/设备选型门槛，不通过一次文档更新声称运行闭环。
 
 # 5 功能实现设计
 
@@ -1570,6 +1659,8 @@ sequenceDiagram
 | JIT Secret 异步传播与删除 | 依赖 Pod 引用及 Karmada `propagateDeps`，清理需确认成员副本 | 不能推断所有引用形态均自动识别，或跨成员销毁是原子事务 |
 | NPU 容量、拓扑及强隔离 | 设备资源请求、节点可放置性与跨租户硬隔离条件必须满足 | 目前 NPU 功能为候选扩展；设备/沙箱兼容性未经选型，不构成已实现能力 |
 | 关键路径与可用性目标 | 已定义阶段、来源、故障域和诊断契约 | 没有业务批准的时延/恢复阈值，不构成量化性能与可用性验收 |
+
+**DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；ST-D01 → F-05/QA-03；SEC-D01 → F-03/F-04/F-06/QA-04；QA-05～06 → SP-07/SP-09。完整场景与剩余风险见 4.7.4。
 
 **最终评审口径**：第 2～5 章设计结构、要求追踪、异常处理与 FMEA 可以通过静态设计检查；涉及上表未确定的技术可实现性、正式指标或实际运行效果，只能标为**待专项选型/接口确认**。不要求开展 PoC，也不以抽象时序图替代上游 API 证据。
 
