@@ -1422,8 +1422,12 @@ sequenceDiagram
 | PL-11 | Backfill 仅使用不影响队首预留承诺的非预留资源 | 没有可信完成时限时不得借用队首保护 Node 的空闲量 |
 | PL-12 | Dispatcher 重启或切主后必须重建队列及账本；Binding 写者互斥，租约具备失效清理 | 两个 Leader 不得同时放行；Dispatcher 退出不能使 Node 永久被 taint |
 | PL-13 | 分时优先级仅重排未放行任务，需有可信 PR/nightly 分类与抗饥饿策略 | 未知任务类别不冒充 PR；旧任务不因每天切换窗口无限期等待 |
+| PL-14 | 跨租户按同一资源族的 NPU 卡时和批准权重仲裁；未落地授予与已完成服务分开计量 | 16 卡×1 小时与 2 卡×1 小时不能视为相同服务；PL-D04 |
+| PL-15 | 类别在 Binding 放行前可信关联；不从可修改的标签推导 PR/nightly | 同 runs-on 无法映射 queued Job 时按 ClassUnknown 普通优先；PL-D05 |
+| PL-16 | 应急调度接管前必须确认原 Binding Writer 失效 | 决策停止但进程仍续约不能判定 Dispatcher 健康；PL-D06 |
+| PL-17 | 切主先对账持久化 grant、Node 预留及实际 NPU Pod；未知容量停止放行 | 空账本不是节点空闲；应急和 Dispatcher 不能双写；PL-D06 |
 
-**设计级验收边界**：PL-07～13 是目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义成员和节点权威，PL-D03 具体设计 FIFO、Reserve Node、Backfill 与恢复，PL-D01 约束已放行 Runner。跨租户权重、分时窗口、延迟及故障阈值为 P 类；不宣称上游已有公平保证、原子预留或 Job 无损迁移。
+**设计级验收边界**：PL-07～17 为目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义两级放置；PL-D03 定义 FIFO/Reserve/Backfill；PL-D04 定义公平计量；PL-D05 定义可信分类；PL-D06 定义故障降级。权重、类别关联、时间窗口及故障阈值均为 P 类，不宣称运行时已经具备公平或无损切换。
 
 ### 5.3.9 DFX分析
 
