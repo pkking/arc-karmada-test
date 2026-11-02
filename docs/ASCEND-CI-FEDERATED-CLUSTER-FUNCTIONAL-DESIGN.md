@@ -1547,8 +1547,8 @@ sequenceDiagram
     R->>MS: hooks 创建携带 NPU resources 的 workflow Pod
     MS->>MS: 依据 Node 资源和拓扑 Filter / Score / Bind
     MS->>W: 绑定实际 NPU Node
-    W->>KL: 已绑定 Pod 触发设备准备
-    KL-->>W: Device Plugin Allocate 暴露设备
+    KL->>KL: kubelet 在 Node 上调用 Device Plugin Allocate
+    KL-->>W: 通过容器运行时暴露设备
     W-->>GH: 执行 Job 并上报结果
     Note over D,MS: Dispatcher 选成员/管理预留；成员调度器决定 Node
 §§§
