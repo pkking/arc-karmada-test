@@ -662,14 +662,14 @@ sequenceDiagram
 | 成员失联、调度事件滞后或容量估计分歧 | 标记 `CapacityUnknown`，冻结相关成员新的肯定放行，保留其他成员的可信候选；观察恢复并对账 | 用旧节点空闲数直接作为确认授予 |
 | 队首长期等待或成员 Pod 优先级竞争 | Dispatcher 维持 FIFO/公平及队首预留；成员 Volcano 按真实 NPU Pod PriorityClass 排序 | Dispatcher 不按 PR/nightly 重排联邦队列，不改已运行 Pod |
 
-**DFX 设计证据和待选参数（P）**：分成员/资源族/租户/任务类别统计队列长度、队首等待、Hold 原因、分配卡时、Backfill 数、被保护容量、预留实际兑现、意外占用、租约过期、Leader 切换与容量快照滞后。区分 `GitHub queued → started` 与 `Binding hold → release`，后者是 Dispatcher 自身等待，不可写成 GitHub 原生排队时间。优先级时间窗口、权重/公平阈值、预留时长、故障切换时限、最大排队时间和利用率目标均需正式批准；没有证据不填写性能承诺。
+**DFX 设计证据和待选参数（P）**：Dispatcher 按成员/资源族/租户统计联邦等待与资源承诺；成员 Volcano 按 NPU Pod PriorityClass 统计待调度队列、调度耗时和抢占/回收事件，分别记录队首等待、Hold、已分配卡时、Backfill、预留兑现及 Leader 切换。区分 `GitHub queued → started` 与 `Binding hold → release`，后者是 Dispatcher 自身等待，不可写成 GitHub 原生排队时间。PriorityClass 相对顺序、Volcano 调度动作、租户权重/公平阈值、预留时长、故障切换时限和等待目标均需正式批准；没有证据不填写性能承诺。
 
 **现有可复用设计**：组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；本节将其作为设计参考，**不将其代码或部署状态自动视为本仓库已实现**。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
 
 
 ### 4.3.7 跨租户加权公平仲裁（PL-D04）
 
-**设计决策（D）**：Dispatcher 在 PL-D03 的**可互换 NPU 资源族/拓扑域**内做跨租户加权公平仲裁；各租户在相同有效优先级内按 FIFO 取出候选。公平计量用**已分配 NPU 卡时**而非 AI Core 利用率或 GitHub Job 数量；成员容量、拓扑和授权是硬约束，公平排序不得越过硬性准入。该机制不改变 GitHub 队列，也不抢占已运行 Pod。
+**设计决策（D）**：Dispatcher 在 PL-D03 的**可互换 NPU 资源族/拓扑域**内做跨租户加权公平仲裁；各租户内部按 FIFO 取出候选，**不参与 PR/nightly Pod 优先级排序**。公平计量用**已分配 NPU 卡时**而非 AI Core 利用率或 GitHub Job 数量；成员容量、拓扑和授权是硬约束，公平排序不得越过硬性准入。该机制不改变 GitHub 队列，也不抢占已运行 Pod。
 
 | 备选机制 | 结论 |
 |---|---|
@@ -683,10 +683,10 @@ sequenceDiagram
 **计量和选择（D）**：
 
 1. 对公平窗口 `W`，记租户已消耗服务量 `A(t,W)=Σ[实际 NPU 请求卡数 × NPU 工作负载占用秒数]`（单位：NPU 卡秒）；以真实 NPU workflow Pod 的请求和运行时间为事实，缺失结束事件不填零。任务已放行但 NPU Pod 尚未绑定的 grant 另入 `I(t)`，用于并发放行限额/超售控制，**不能将它当作已完成服务量**。保护中的预留 `R(t)` 计入资源预算和公平配额占用，避免单租户长期冻结其他租户容量，但不得重复计入 `A`。
-2. 活跃且具备合格成员容量的租户按 `A(t,W)/weight(t)` 从小到大选择；同值采用稳定租户 ID；每租户优先选择**有效优先级最高、同级最早入队**的候选 Binding。窗口老数据过期且新需求到来时正常参与竞争，不继承不可追踪的历史债务。
-3. 同一轮决定内先检查有效优先级（PL-D05）、资源授权和配额，再进行加权公平；对低于当前优先级但等待时间达到已批准的老化门槛的任务进行有限提升，避免跨类别长期饥饿。高优先级任务也不得打破成员授权或既有队首预留。
+2. 活跃且具备合格成员容量的租户按 `A(t,W)/weight(t)` 从小到大选择；同值采用稳定租户 ID；每租户选择**最早入队**的可放行 Binding，不依据 PR/nightly 类别排序。窗口老数据过期且新需求到来时正常参与竞争，不继承不可追踪的历史债务。
+3. 同一轮决定先检查资源授权、容量和配额，再进行加权公平；避免长期等待的机制只基于租户服务量与队首等待，不读取成员 Pod 的 PriorityClass。PL-D05 的成员优先级不可以越过 Dispatcher 已有授权、Reserve Node 和 Backfill 安全约束。
 4. 队首因资源碎片化不可放置时，遵守 PL-D03 的 Reserve Node/安全 Backfill；回填任务仍需经过租户配额与公平排序，且不能因自己总是能放置而连续绕过同一被保护队首。
-5. 仅在资源供给可行、成员调度有进展、长期运行任务最终释放资源、类别与租户身份可靠时，才能讨论长期公平收敛。**不承诺短期严格比例、固定等待上界或在无抢占条件下绝对不饥饿**。公平窗口 `W`、配额上限、权重和老化阈值必须批准后才能确定量化目标。
+5. 仅在资源供给可行、成员调度有进展、长期运行任务最终释放资源、租户身份可靠时，才能讨论长期公平收敛。**不承诺短期严格比例、固定等待上界或在无抢占条件下绝对不饥饿**。公平窗口 `W`、配额上限、权重和老化阈值必须批准后才能确定量化目标。
 
 **设计反例**：租户甲的 16 卡任务与乙的 2 卡任务不能按“每人各获得一个任务”认作公平；已经执行 16 卡×1 h 的服务量高于 2 卡×1 h。若甲的队首因拓扑无法运行，乙可以在独立资源 Backfill，但不得消费甲的有效预留。某租户身份缺失时不得继承其他租户的剩余配额或高权重。
 
@@ -703,7 +703,7 @@ sequenceDiagram
 | Volcano | 启用版本兼容的 `priority` plugin；依据 Node 资源和拓扑完成成员内调度 | `PriorityClass` 不能让 Dispatcher 重排尚未放行的 Runner Binding |
 | 不抢占现有任务 | 目标是优先调度**待运行**任务，不驱逐正在运行的 nightly | 目标 Volcano 调度配置不得开启会对现有 NPU Pod 造成抢占/回收的 `preempt` / `reclaim` 路径；`preemptionPolicy: Never` 仅约束该类 Pod **主动发起抢占**，并不防止其他高优先级 Pod 抢占它 |
 
-**静态优先级的语义**：较低的 nightly PriorityClass 表示 **PR 总体优先于 nightly 的成员内等待顺序**，并不意味着夜间 automatically 把 nightly 调为高优先级。如未来要实现“白天 PR 优先、夜间 nightly 反过来优先”，需要另行设计成员层的动态策略或不同任务提交策略；**不应因此把任务类别识别搬回 Dispatcher**。
+**静态优先级的语义**：较低的 nightly PriorityClass 表示 **在相同成员 Volcano 调度队列中，PR 优先于 nightly**，但不会在夜间自动把 nightly 调为高优先级。如未来要实现“白天 PR 优先、夜间 nightly 反过来优先”，需要另行设计成员层的动态策略或不同任务提交策略；**不应因此把任务类别识别搬回 Dispatcher**。
 
 **边界与反例**：
 
@@ -1299,7 +1299,7 @@ Controller 创建 Runner Pod，Detector 形成 Binding；目标 Dispatcher 按 P
 | 多个 Runner 竞争剩余容量，队首大任务等待 | 目标 Dispatcher 按 PL-D03 Hold/Release，保护队首后仅允许安全 Backfill；不把当前 Karmada 默认能力宣称为 FIFO | 队列顺序、Binding Hold/Release、节点预留、grant 与 NPU workflow PodScheduled |
 | 已分发成员失联 | 状态保持可诊断；不将 Job 视作自动迁移完成 | Cluster Ready、Work 状态、Pod/Runner 关联 ID |
 
-**接口契约补充**：Karmada `resourceSelectors` 选取 Runner Pod，`clusterAffinity` 限定授权成员。目标 Dispatcher 以 PL-D03 的 FIFO/优先级/Reserve/Backfill 策略 Hold/Release Binding，选唯一成员；Karmada Work 分发 Runner；成员 kube-scheduler/Volcano 绑定实际 NPU Pod。`Weighted` 不是跨独立 Runner 的队列算法。
+**接口契约补充**：Karmada `resourceSelectors` 选取 Runner Pod，`clusterAffinity` 限定授权成员。目标 Dispatcher 以 PL-D03/D04 的 FIFO/跨租户公平/Reserve/Backfill 策略 Hold/Release Binding，选唯一成员；Karmada Work 分发 Runner；成员 kube-scheduler/Volcano 绑定实际 NPU Pod。`Weighted` 不是跨独立 Runner 的队列算法。
 
 #### 5.3.4.1 UC-05 在合格成员放置 Runner——运行时序（US-03）
 
@@ -1314,7 +1314,7 @@ sequenceDiagram
     participant M as Member kube-scheduler/Volcano
     C->>K: 创建 Runner Pod，Detector 形成 Binding
     K-->>D: 可观察到待放行 Binding
-    D->>D: 确认可信队列身份，按公平与优先级确定队首
+    D->>D: 按公平服务量和 FIFO 确定队首
     D->>A: 读取容量、grant 与预留状态
     alt 队首当前可放置
         D->>K: 指定唯一成员并放行 Binding
@@ -1426,13 +1426,13 @@ sequenceDiagram
 | PL-06 | 成员不可达或 Pod 未就绪不得触发未经去重证明的 GitHub Job 重派 | 只按上游生命周期和后续 T3 约束处理 |
 | PL-07 | Dispatcher 只能选择成员；需要可靠的单节点可放置容量信号，但不得把估算节点视为已经绑定的 NPU Pod | A 单节点最多 8 卡、B 单节点 16 卡时，16 卡工作流选 B 成员；由 B 的 kube-scheduler/Volcano 决定 Node；见 PL-D02 |
 | PL-08 | Dispatcher 的未落地容量授予与节点预留须持续对账；实际 NPU 分配以成员工作流 Pod 的节点绑定及 kubelet 事实为准 | 两个 Runner 不得共用同一份预估空闲容量；预留 Node taint 不等于 workflow Pod 必定绑定该节点；见 PL-D02 |
-| PL-09 | Dispatcher 只在具备可信队列身份和成员授权时对 Binding Hold/Release，按公平作用域决定顺序 | GitHub Job 排队与 Binding Hold 不是同一阶段；ClassUnknown 不获得高优先级 |
+| PL-09 | Dispatcher 仅按队列身份、可信租户与成员授权对 Binding Hold/Release | GitHub Job 排队与 Binding Hold 不同；PR/nightly 优先级仅在成员 NPU Pod 生效 |
 | PL-10 | 预留须由 Node 保护租约、归属、精确 toleration 和同组 Hold 协同执行 | 同组后继不能占队首预留 Node；禁止 `Exists` 通配 |
 | PL-11 | Backfill 仅使用不影响队首预留承诺的非预留资源 | 没有可信完成时限时不得借用队首保护 Node 的空闲量 |
 | PL-12 | Dispatcher 重启或切主后必须重建队列及账本；Binding 写者互斥，租约具备失效清理 | 两个 Leader 不得同时放行；Dispatcher 退出不能使 Node 永久被 taint |
-| PL-13 | 分时优先级仅重排未放行任务，需有可信 PR/nightly 分类与抗饥饿策略 | 未知任务类别不冒充 PR；旧任务不因每天切换窗口无限期等待 |
+| PL-13 | Dispatcher 不处理 PR/nightly 类别、分时窗口或 PriorityClass；只管理联邦公平和队首保护 | nightly 低优先级由真实 NPU Pod 声明；不得把成员的优先级当作 Binding 放行优先级 |
 | PL-14 | 跨租户按同一资源族的 NPU 卡时和批准权重仲裁；未落地授予与已完成服务分开计量 | 16 卡×1 小时与 2 卡×1 小时不能视为相同服务；PL-D04 |
-| PL-15 | 类别在 Binding 放行前可信关联；不从可修改的标签推导 PR/nightly | 同 runs-on 无法映射 queued Job 时按 ClassUnknown 普通优先；PL-D05 |
+| PL-15 | nightly NPU Pod 应携带低优先级 priorityClassName，由成员 Volcano 排序；不允许不受控抢占 | 只有 CPU Runner Pod 配置 PriorityClass、实际 NPU workflow Pod 未配置时不满足目标；PL-D05 |
 | PL-16 | 应急调度接管前必须确认原 Binding Writer 失效 | 决策停止但进程仍续约不能判定 Dispatcher 健康；PL-D06 |
 | PL-17 | 切主先对账持久化 grant、Node 预留及实际 NPU Pod；未知容量停止放行 | 空账本不是节点空闲；应急和 Dispatcher 不能双写；PL-D06 |
 
