@@ -1762,7 +1762,7 @@ sequenceDiagram
 |---|---|---|---|---|
 | FT-01：SR-01-01 | F-01 | SP-01 | 5.1.4.1（UC-02 为异常场景） | `04-autoscalingrunnerset.yaml`、GitHub Workflow |
 | FT-01/FT-04：SR-02-01、SR-02-02 | F-02 | SP-01、SP-07 | 5.2.4.1 / 5.2.4.2 | 官方 ARC、RunnerSet、对象生命周期契约 |
-| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、Dispatcher Binding hold/release、成员 NPU Pod 调度接口（PL-D02） |
+| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、Dispatcher Binding Hold/Release 与队列/预留接口（PL-D02/D03）、成员 NPU Pod 调度 |
 | FT-03：SR-04-01 | F-04 | SP-04、SP-05 | 5.4.4.1 | `03-rbac.yaml`、`04-autoscalingrunnerset.yaml` Listener Template |
 | FT-03：SR-05-01 | F-05 | SP-06 | 5.5.4.1 | `01-karmada-interpreter.yaml` |
 | **扩展候选：原 SR-06-01，当前非正式 SR** | F-06 | SP-02、SP-08 | 5.6.4.1 / 5.6.4.2 | 尚需设备选型；仓库未配置 NPU 扩展资源 |
@@ -1776,17 +1776,17 @@ sequenceDiagram
 | IR-01 / FT-01 | SR-01-01 | UC-01、UC-02 | F-01；5.1.6 | SP-01、SP-05；SEC-02 | 5.1.9：F01-01～02 |
 | IR-01 / FT-01 | SR-02-01 | UC-03 | F-02；5.2.6 | SP-01、SP-07；LC-03/04 | 5.2.9：F02-01～02 |
 | IR-04 / FT-04 | SR-02-02 | UC-04、UC-12（清理异常） | F-02、F-05；5.2.6、5.5.6 | SP-07、SP-06；LC-05/06 | 5.2.9：F02-02～03；5.5.9 |
-| IR-02 / FT-02 | SR-03-01 | UC-05、UC-10 | F-03；5.3.6 | SP-02、SP-03；PL-01～08、PL-D01/D02 | 5.3.9：F03-01～05 |
+| IR-02 / FT-02 | SR-03-01 | UC-05、UC-10 | F-03；5.3.6 | SP-02、SP-03；PL-01～13、PL-D01/D02/D03 | 5.3.9：F03-01～09；QA-07～09 |
 | IR-03 / FT-03 | SR-03-02 | UC-06 | F-03；5.3.6 | SP-03、SP-04；LC-04 | 5.3.9：F03-02 |
 | IR-03 / FT-03 | SR-04-01 | UC-08、UC-11 | F-04；5.4.6 | SP-04、SP-05；SEC-01～06 | 5.4.9：F04-01～04 |
 | IR-03 / FT-03 | SR-05-01 | UC-09、UC-12（状态异常） | F-05；5.5.6 | SP-06、SP-07；LC-01/02/06 | 5.5.9：F05-01～03 |
 | 扩展候选（不属于正式 IR/FT） | 原 SR-06-01（未纳入） | UC-07、UC-13 | F-06；5.6.6 | SP-02、SP-08；PL-04/05 | 5.6.9：F06-01～03 |
 
-**非功能要求的横向追踪**：SR-NF-01/02 对应第 4.4、5.4 及 F03-01/F04-03/F04-04；SR-NF-03 对应 4.5、4.7.2、F02-03/F03-03/F05-02；SR-NF-04 对应 3.5.1、4.7.3、QA-04 及各功能诊断；SR-NF-05/06 对应 4.7.1、4.7.4、5.2、F02-01/F03-03；SR-NF-08 对应 4.3、5.3、PL-01/02。完整的非功能条目见 5.8.2。
+**非功能要求的横向追踪**：SR-NF-01/02 对应第 4.4、5.4 及 F03-01/F04-03/F04-04；SR-NF-03 对应 4.5、4.7.2、F02-03/F03-03/F05-02/F03-07/09；SR-NF-04 对应 3.5.1、4.7.3、QA-04/08 及各功能诊断；SR-NF-05/06 对应 4.3.6、4.7.1/4.7.4、F02-01/F03-03/06/08、QA-07～09；SR-NF-08 对应 4.3、5.3、PL-01/02/09。完整的非功能条目见 5.8.2。
 
 **UC/US 对应关系**：UC-01→US-01；UC-03→US-02；UC-05→US-03；UC-06→US-04；UC-08→US-05；UC-09→US-06；UC-04→US-07；UC-07→US-08。UC-02、UC-10、UC-11、UC-12、UC-13 为异常分支，其中 UC-10/11/13 已给出异常时序，UC-02/12 由异常契约及状态规则覆盖；**没有对应独立 US 编号不表示该 UC 已被实现**。
 
-**现状与目标**：SP-03（Pod 选择器过宽）、SP-04（长期 GitHub 主凭证传播）、SP-05（Controller 高权限与 Token 轮换）、SP-06（状态解释器首个非空）均保留“当前配置与目标不符”的描述；未因设计追踪完成而改变其实际实现状态。跨成员资源容量预约、调度公平性和多来源状态冲突处理尚未具备可确认的实现依据。
+**现状与目标**：SP-02（当前无 Dispatcher Hold/Reserve/Backfill）、SP-03（Pod 选择器过宽）、SP-04（长期 GitHub 主凭证传播）、SP-05（Controller 高权限与 Token 轮换）、SP-06（状态解释器首个非空）均是目标设计与当前配置差异。PL-D03 规定公平与队首保护的设计条件，但并不代表这些机制已在本仓库部署，也不代表多来源状态一致性已经实现。
 
 ### 5.8.2 非功能需求与详细设计追踪
 
@@ -1796,7 +1796,7 @@ sequenceDiagram
 | SR-NF-02 凭证保护 | SP-04、SP-09 | 5.2.9、5.3.9、5.4.9 |
 | SR-NF-03 成员故障隔离 | SP-02、SP-07 | 5.2.9、5.3.4.3、5.3.9 |
 | SR-NF-04 可服务性 | SP-09 | 5.1～5.6 各功能的 DFX |
-| SR-NF-05 性能与容量 | SP-01、SP-09 | 5.1.9、5.2.9；量化参数 P-SR-01、P-SR-02 |
+| SR-NF-05 性能与容量 | SP-01/02、SP-09、PL-D03 | 4.3.6、4.7.1/4.7.4、5.3.4/5.3.9；量化参数 P-SR-01、P-SR-02 |
 | SR-NF-06 成本与资源利用 | SP-01、SP-07 | 5.2.3、5.2.9；量化参数 P-SR-04 |
 | SR-NF-08 策略可维护性 | SP-01、SP-02 | 4.2、4.3、5.3.6 |
 
@@ -1811,13 +1811,14 @@ sequenceDiagram
 | Karmada `ResourceInterpreterCustomization` 多来源识别 | 必须根据当前目标成员/对象身份过滤状态，冲突时不得宣称 Ready | 未确认目标版本的 `statusItems` 可见字段与筛选扩展点，不得标记“可直接由当前 Lua 实现” |
 | ARC Controller/Listener RBAC 最小化 | 必须根据目标版本的真实 API verbs/resources 收敛 | 当前 Controller admin kubeconfig 不符合生产目标；文档不能替代权限实施 |
 | JIT Secret 异步传播与删除 | 依赖 Pod 引用及 Karmada `propagateDeps`，清理需确认成员副本 | 不能推断所有引用形态均自动识别，或跨成员销毁是原子事务 |
-| NPU 资源容量与节点可放置性 | PL-D02：Dispatcher 选择成员并协调容量预留，成员 kube-scheduler/Volcano 选择具体 NPU Node，kubelet/Device Plugin 分配设备 | Dispatcher Binding 独占权、hooks 是否强制 Runner/workflow 同节点、成员容量估计与预留恢复仍需版本级确认；当前 Manifest 未实现 |
+| NPU 资源容量与节点可放置性 | PL-D02：Dispatcher 选择成员并协调容量预留，成员 kube-scheduler/Volcano 选择 NPU Node，kubelet/Device Plugin 分配设备 | Dispatcher Binding 独占权、hooks 同节点行为、成员容量估计及预留恢复需版本级确认；当前 Manifest 未实现 |
+| FIFO/Reserve Node/Backfill 与公平 | PL-D03：Dispatcher 持有与放行 Binding、队首容量保护、非预留容量 Backfill、优先级与租户公平仲裁 | 可信 PR/nightly 类别、租户来源、批准时间窗口/权重、Node 精确 Toleration、同组 Hold、租约清理和应急调度互斥尚需接口与参数确认 |
 | 关键路径与可用性目标 | 已定义阶段、来源、故障域和诊断契约 | 没有业务批准的时延/恢复阈值，不构成量化性能与可用性验收 |
 
-**DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；PL-D02 → F-03/QA-01、QA-04、PL-07/08、F03-03～05；ST-D01 → F-05/QA-03；QA-05～06 → SP-07/SP-09。剩余风险见 4.7.4。
+**DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；PL-D02 → F-03/QA-01、QA-04、PL-07/08、F03-03～05；PL-D03 → F-03/QA-07～09、PL-09～13、F03-06～09；ST-D01 → F-05/QA-03；QA-05～06 → SP-07/SP-09。剩余风险见 4.7.4。
 
 **最终评审口径**：第 2～5 章设计结构、要求追踪、异常处理与 FMEA 可以通过静态设计检查；涉及上表未确定的技术可实现性、正式指标或实际运行效果，只能标为**待专项选型/接口确认**。不要求开展 PoC，也不以抽象时序图替代上游 API 证据。
 
 **统一资料来源及版本边界**：本文件 3.7 给出 ARC/GitHub Actions、Karmada、Kubernetes 官方文档索引；本仓库现有 Manifest 用于定位配置差异；任何仅有内部运行记录支持、而无上游接口规范支持的声明都应标明为集成设计假设。缺少 PoC 不构成功能设计缺口，但 **SR/接口/异常/DFX 未定义**属于设计缺口。
 
-**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 型号与扩展资源名、成员放置与容量策略、性能/可用性 SLO。若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
+**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 型号与扩展资源名、跨租户权重、PR/nightly 可信类别及时间窗口、Reserve/Backfill 租约与保护预算、性能/可用性 SLO。若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
