@@ -226,7 +226,7 @@ NPU 专项适配为后续扩展，不单列核心特性。
 
 ### 3.2.2 联邦放置能力与容量保证的边界
 
-**设计结论：** 当前的基本放置路径为「策略限定候选成员 → Karmada 选择成员 → 成员 kube-scheduler 选择节点」。这能配置**允许放置的成员范围**，但不等于对独立 Runner Pod 提供跨成员最优选择、NPU 拓扑可用性判断、容量预留或排队公平保证。GitHub 的 Job 分配与 Karmada 的 Pod 放置是不同决策，不能相互替代。
+**设计结论：** 当前配置是「策略限定成员 → Karmada 选择成员 → 成员 kube-scheduler 选择节点」；目标设计是「Karmada 提供联邦事实/资源分发 → Dispatcher 排队并选择成员 → 成员 kube-scheduler/Volcano 选择实际 NPU 节点」。这能配置**允许放置的成员范围**，但不等于对独立 Runner Pod 提供跨成员最优选择、NPU 拓扑可用性判断、容量预留或排队公平保证。GitHub 的 Job 分配与 Karmada 的 Pod 放置是不同决策，不能相互替代。
 
 | 方案/机制 | 可直接依据的保证 | 无法直接推出的保证 | 本方案处理 |
 |---|---|---|---|
@@ -238,7 +238,7 @@ NPU 专项适配为后续扩展，不单列核心特性。
 
 **可核查的官方依据：** [Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/) 明确 `clusterAffinity` 定义候选集而非确保全部被选；`replicaScheduling` 的分副本语义针对具有副本规格的资源。目标产品版本应固定后再核对 CRD 与调度器实现；`next` 文档仅供理解能力范围。
 
-**设计取舍：** Karmada 承担跨成员传播；现有 `clusterAffinity/Weighted` 仅是放置基线。**目标设计**采用 PL-D02 的节点容量感知 Filter/Score 与未落地占用跟踪，减少首次误放置造成的排队；已绑定 Runner 仍遵循 PL-D01，不宣称原子资源预约、FIFO 或无损迁移。
+**设计取舍：** Karmada 负责联邦资源对象和传播；目标 Dispatcher 持有 Runner Binding，负责跨成员队列、容量估计、预留与选择成员。**成员调度器拥有 NPU Pod 的节点 Filter/Score/Bind 权限**。PL-D02 明确双层权威；已绑定 Runner 遵循 PL-D01，不宣称原子资源预约或无损迁移。
 
 ## 3.3 端到端实现思路
 
@@ -409,7 +409,7 @@ erDiagram
 | 规格编号 | 当前配置 | 目标设计要求 | 负责方 |
 |---|---|---|---|
 | SP-01 Runner 服务命名 | 示例的 Scale Set 名称为 `karmada-runner`，`minRunners` 为 0，`maxRunners` 为 5。 | 平台必须保持 GitHub 工作流标签与 Runner 服务名称一致。Runner 数量的上下限由业务容量参数确定。 | 平台配置维护者 |
-| SP-02 候选成员策略 | 现有策略包含 member1、member2，使用 `Divided/Weighted`，不含单节点容量估计。 | 保持 Runner 单目标；目标由 Karmada 定向 Scheduler 以节点完整可放置性 Filter/Score 选择成员，扣减未落地占用。Unknown 不作 Feasible；详见 PL-D01/D02。 | 联邦调度维护者 |
+| SP-02 候选成员策略 | 现有策略仅用 member1、member2 与 `Divided/Weighted`，无 Dispatcher。 | 目标由 **Dispatcher 在 Karmada 控制面选择成员并管理等待、预留、回填**；以成员提供的容量事实判断准入，不在联邦层绑定 NPU Node。实际节点由成员调度器确定；见 PL-D01/D02。 | 联邦调度维护者 |
 | SP-03 Runner Pod 选择范围 | 现有策略匹配 `arc-runners` 命名空间的全部 Pod。 | 平台必须只选择 ARC 管理的 Runner Pod。开发人员须按目标 ARC 版本的对象标签定义选择条件，并检查其他 Pod 不会被选中。 | 联邦策略维护者 |
 | SP-04 GitHub 主凭证传播 | 现有策略将 `arc-github-secret` 同步到两个成员集群。 | 平台必须按实际凭证使用者确定传播范围。临时 Runner 不应因为需要跨集群运行而自动获得 GitHub 管理凭证。 | 身份管理者 |
 | SP-05 Listener API 身份 | 示例通过单独的 Token 和 CA 证书访问固定 API 地址，Token 由脚本签发。 | 平台必须提供可配置的 API 地址、可信 CA、最小权限和凭证更新规则。必须区分网络、证书、身份认证和权限错误。 | 身份管理与部署维护者 |
@@ -452,7 +452,7 @@ Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner P
 | `PropagationPolicy.metadata.namespace` | 策略必须位于待传播 Runner Pod 所属的命名空间。平台必须检查该范围不会包括其他租户的 Pod。 | 当前使用 `arc-runners`。 |
 | `resourceSelectors` | 策略必须只选择目标 Runner 服务管理的 Pod，所用标签必须符合选定 ARC 版本的对象定义。 | 除检查目标 Pod 被选中，还必须检查其他 Pod 不被选中；当前全命名空间匹配属于待修改配置。 |
 | `placement.clusterAffinity` | 平台必须指定可以接收 Runner Pod 的成员集群，并根据设备类型、节点架构及隔离条件确定候选集。 | 当前示例为 member1 和 member2，不能把它们当成通用常量。 |
-| `replicaScheduling` / `spec.schedulerName` | `Divided/Weighted` 用于受支持的副本工作负载；目标 Runner Pod 以经目标版本核对的 `spec.schedulerName` 定向 Karmada Scheduler。 | 当前未定向；Karmada 分副本超卖保护不能直接用于独立 Pod。 |
+| `replicaScheduling` / `spec.schedulerName` | 对独立 Runner Binding，在版本确认后由 `spec.schedulerName` 指向 Dispatcher；`Divided/Weighted` 不提供独立 Runner FIFO、预留或 Backfill。 | 需保证只有 Dispatcher 写入目标 `spec.clusters`，Karmada 负责后续 Binding/Work 传播；当前未配置。 |
 | `propagateDeps` | Karmada 必须将 Runner Pod 引用的 JIT Secret 等依赖资源传播到该 Pod 所在的成员。 | 依赖到达顺序不保证是原子事务；Secret 缺失时保留 Pod 挂载或启动异常状态。 |
 | 主凭证 | 平台不得仅因为传播 Runner Pod 就把 GitHub 管理凭证分发到所有成员。 | 只有明确存在成员侧消费者并已授权时，才允许额外分发相应凭证。 |
 | 执行态 | 成员 Kubernetes 负责维护 Pod 的 `Pending`、`FailedMount`、`ErrImagePull` 等状态或事件。 | 平台必须显示或保存异常原因，不得因此重复提交同一个 GitHub 作业。 |
@@ -475,7 +475,7 @@ Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner P
 | 节点调度 | 成员 kube-scheduler | 节点上的资源请求、污点/亲和性及可调度性 | GitHub Job 已成功执行 | 资源不足时 Pending/FailedScheduling；保留请求不降级 |
 | 实际运行 | kubelet/Device Plugin/Runner | 设备分配、Pod 状态及 Runner 注册过程 | 单凭 Pod Ready 判断 GitHub Job 结果 | 运行异常按状态与生命周期契约处理，不自行重派 Job |
 
-**容量正确性边界**：当前 Manifest 不包含节点级容量模型、NPU Pod 请求或未落地占用跟踪。PL-D02 将单节点完整可放置性作为首次放置的目标 Filter；成员实际 Node 绑定仍是最终事实，异步快照和其他调度器竞争可能造成 Pending。PL-D02 不改变已绑定 Runner 的 PL-D01 单目标约束，也不构成原子容量预约或运行时已实现证明。
+**容量正确性边界**：当前 Manifest 没有 Dispatcher 或未落地占用跟踪。PL-D02 要求 Dispatcher 在成员选择前参考成员提供的可放置容量信号，**但不运行 NPU Pod 的节点 Filter/Score/Bind**。成员实际 Node 绑定是最终事实；预留节点仅是容量保护提示。异步快照可能失效，不构成原子容量预约；已绑定 Runner 的边界见 PL-D01。
 
 **失败/竞争处理规则**：
 
@@ -823,10 +823,10 @@ F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复�
 
 | 场景/质量属性 | 刺激与环境 | 架构响应与负责组件 | 设计判据、残余风险与追踪 |
 |---|---|---|---|
-| QA-01 性能/容量 | 首次放置 16 卡 Runner：A 总空闲 20 卡但单节点最多 8 卡，B 有单节点 16 卡 | PL-D02 目标 Filter 排除 A、首次选择 B；若 Runner 已绑定 A，则 PL-D01 保留单目标 | 初次放置与绑定后行为必须区分；单节点完整请求才是依据；F03-03、SR-NF-05 |
+| QA-01 性能/容量 | 需 16 卡 NPU 的 workflow：A 聚合空闲 20 卡但单节点最多 8 卡，B 有单节点 16 卡 | Dispatcher 用成员容量信息过滤 A、选择 B；**B 的成员调度器**决定最终 NPU 节点 | 不把 Dispatcher 估计或预留节点作为实际 Pod 绑定；PL-D01/D02、F03-03、SR-NF-05 |
 | QA-02 可靠性/可用性 | Runner 运行期间成员失联，Job 终态不可得 | ARC/GitHub 维持原生生命周期；平台仅标记 ExecutionUnknown，不主动重派 | 没有双实例的**集成层额外创建动作**；上游重试行为另按协议评审；PL-D01、LC-07、SR-NF-03 |
 | QA-03 状态正确性 | 旧 A 的 Ready 与新 B 状态冲突 | Karmada Binding/Work 提供目标事实；状态仲裁以成员和 UID 校验，诊断 StatusUnknown | 当前 Lua 不能证明已有缓存 Ready 不被 ARC 读取；这是**显式保留的高风险可实现性缺口**；ST-D01、F05-02 |
-| QA-04 排队与等待归因 | Job 持续等待、成员无可行节点/容量未知，多个 Runner 并发争抢最后资源 | GitHub/ARC/Karmada/成员分别提供事实；目标 Scheduler 分类 NoFeasibleNode/CapacityUnknown 并记录暂计 | 不把 Pod Pending 记为 GitHub 队列重排；Unknown 不代表可用；PL-D02、F03-04/05、SR-NF-04/05 |
+| QA-04 排队与等待归因 | Dispatcher 等待放行 Runner，或成员 NPU workflow Pod 已创建但 Pending | 分别记录 GitHub Job 状态、Dispatcher Binding hold、Karmada 传播、成员 PodScheduled/FailedScheduling；容量未知记 CapacityUnknown | 成员 NPU Pod Pending 不等于 GitHub Job 仍在 queued；不得把单节点绑定责任移给 Dispatcher；PL-D02、F03-04/05 |
 | QA-05 可服务性 | Secret 晚到、成员失联或 JIT 删除滞后 | ARC/Karmada/成员各保留 UID、事件和清理来源，平台逐对象关联 | 未确认删除标记 CleanupUnknown，缺失 ID 不猜测；LC-05/06、SR-NF-04 |
 | QA-06 可维护性 | 升级 ARC/Karmada 后聚合字段或权限变更 | 目标版本 API/CRD 与 Manifest/身份权限对照；不凭 `next` 文档作为版本承诺 | 版本未锁定前不能完成实现级兼容性验收；SP-05/06、SR-NF-08 |
 
@@ -1112,12 +1112,12 @@ Controller 创建 Pod；Karmada 选成员、分发 Pod 和依赖；成员挂载 
 |---|---|---|
 | 有授权候选成员，成员 Pod 正常启动 | 保留 Karmada placement，后续以成员 Pod/Runner 状态判定可执行 | Pod UID、目标 Cluster、Binding/Work、节点/Ready 状态 |
 | 无授权或健康候选成员 | 不扩张到未授权成员；不创建重复 Job | 策略选择器、成员状态、调度事件 |
-| 放置成功但成员节点资源不足 | 当前 Pod 仍 Pending；目标 PL-D02 应在首次放置前排除已知无完整节点的成员，误差仍需诊断 | `FailedScheduling`、Pod requests、节点/容量快照、Binding UID |
+| 目标成员已选但 NPU workflow Pod 因节点不足 Pending | 成员 kube-scheduler/Volcano 负责节点调度和 Pending；Dispatcher 用反馈修正可用容量与后续放行，不擅自重派同一 Job | workflow Pod 的 `FailedScheduling`、节点请求、成员容量快照、Runner/Binding UID |
 | 设备资源分散，单节点无法满足完整请求 | 不把成员聚合空闲容量当作单节点可满足证明 | 节点可用资源、亲和性、设备插件状态 |
 | 同时多个 Pod 竞争剩余容量 | 不宣称原子预留、FIFO、公平或成功放置保证 | Binding/Work 与成员 Pod 的创建及调度事件 |
 | 已分发成员失联 | 状态保持可诊断；不将 Job 视作自动迁移完成 | Cluster Ready、Work 状态、Pod/Runner 关联 ID |
 
-**接口契约补充**：`resourceSelectors` 选取 Runner Pod，`clusterAffinity` 限定授权成员；目标采用 PL-D02 的定向 Scheduler Filter/Score、容量估计与暂计，最终由原生 Binding/Work 传播，成员 Pod.status 给出真实节点执行事实。`Weighted` 不代表跨独立 Pod 轮转策略。
+**接口契约补充**：Karmada `resourceSelectors` 选取 Runner Pod，`clusterAffinity` 限定授权成员；目标 Dispatcher 依据成员容量与 FIFO/Reserve/Backfill 策略持有或放行 Runner Binding，确定唯一成员。Karmada Work 分发 Runner，成员 kube-scheduler/Volcano 独立为实际 NPU workflow Pod 选择节点。`Weighted` 不是跨独立 Runner 的队列算法。
 
 #### 5.3.4.1 UC-05 在合格成员放置 Runner——运行时序（US-03）
 
@@ -1246,10 +1246,10 @@ sequenceDiagram
 | PL-04 | 单个 Runner Pod 不能通过聚合多个节点/成员空闲量证明满足完整资源请求 | 容量碎片化仍可能导致 Pending；保留诊断状态 |
 | PL-05 | 独立 Pod 的 `Divided/Weighted` 不构成跨 Pod 比例、NPU 预留或调度公平保证 | 不在设计或验收中使用无依据的成功率/均衡性承诺 |
 | PL-06 | 成员不可达或 Pod 未就绪不得触发未经去重证明的 GitHub Job 重派 | 只按上游生命周期和后续 T3 约束处理 |
-| PL-07 | 首次放置依据单节点完整可放置性过滤成员；容量 Unknown 不得判作 Feasible | A 总空闲 20 卡但单节点最多 8 卡，B 有单节点 16 卡时，16 卡 Runner 的首次放置应选 B；见 PL-D02 |
-| PL-08 | 未落地分配必须在下一次容量判断前被扣减，并和成员实际调度事实对账 | 两个 Runner 不得基于同一旧快照宣称资源同时保留；见 PL-D02 |
+| PL-07 | Dispatcher 只能选择成员；需要可靠的单节点可放置容量信号，但不得把估算节点视为已经绑定的 NPU Pod | A 单节点最多 8 卡、B 单节点 16 卡时，16 卡工作流选 B 成员；由 B 的 kube-scheduler/Volcano 决定 Node；见 PL-D02 |
+| PL-08 | Dispatcher 的未落地容量授予与节点预留须持续对账；实际 NPU 分配以成员工作流 Pod 的节点绑定及 kubelet 事实为准 | 两个 Runner 不得共用同一份预估空闲容量；预留 Node taint 不等于 workflow Pod 必定绑定该节点；见 PL-D02 |
 
-**设计级验收边界**：PL-07/08 是目标扩展的架构约束，当前 Manifest 未满足。PL-D02 设计首次放置与降低超卖风险，PL-D01 约束已绑定 Runner；全局公平 FIFO、原子资源预留和已绑定 Runner 安全迁移不属于本次已解决的能力。
+**设计级验收边界**：PL-07/08 是目标分层调度约束，当前 Manifest 未满足。Dispatcher 的全局 FIFO、节点预留与 Backfill 必须在后续队列规则中展开；不能仅用 Karmada Filter/Score 取代。PL-D01 继续约束已绑定 Runner；本轮不宣称实现了公平保证、原子预留或 Job 无损迁移。
 
 ### 5.3.9 DFX分析
 
@@ -1269,9 +1269,9 @@ sequenceDiagram
 |---|---|---|---|---|---|---|
 | F03-01 | 过宽 Pod 选择器误传播非 Runner 工作负载 | 非目标 Pod 占用成员资源、扩大传播范围 | 高 | SP-03/PL-01 精确匹配 ARC Runner Pod，不改动其他工作负载 | 非目标 Pod 不匹配；当前全命名空间选择器标为未满足 | 策略标签随 ARC 版本改变可能导致误选或漏选 |
 | F03-02 | JIT Secret 与 Pod 异步传播 | Pod FailedMount 或启动超时 | 中 | SP-04/LC-04 关联引用依赖、保持 Pending、原生调谐 | Secret 晚到时不出现伪 Ready；可关联失败事件和传播状态 | 异步到达与联邦同步延迟 |
-| F03-03 | 成员故障或节点容量碎片化 | Runner Pending、排队且可用性下降 | 高 | PL-02～PL-07；PL-D02 在首次放置前过滤无完整可行节点的成员 | A 聚合空闲足够但节点不够、B 有完整节点时首次选择 B；保留实际 FailedScheduling | 设备拓扑模型不完整或其他调度器竞争仍可引发 Pending |
-| F03-04 | 异步快照漏计尚未落地的 Runner | 多个独立 Pod 被放到同一耗尽成员 | 高 | PL-08、PL-D02：以 UID 跟踪暂计、对账已绑定 Pod | 后一调度决策不得重复使用前一决策暂计的设备资源 | 调度器重启/跨调度器竞争无法取得原子保证 |
-| F03-05 | Estimator 不可用或设备模型不完整 | 无谓 Pending 或长时间无法放置 | 高 | CapacityUnknown 与原因分类、保守等待、容量恢复后重新评估 | Unknown 不得判定可放置；恢复后可区别容量不足和估计失败 | 保守策略可能延长等待，阈值为 P 类 |
+| F03-03 | 成员故障或节点容量碎片化 | Runner/Job 等待，NPU workflow Pod 可能 Pending | 高 | PL-02～PL-07；Dispatcher 参考成员节点可放置容量选择集群，成员调度器选 NPU Node | A 聚合卡数足够但单节点不够、B 有完整节点时 Dispatcher 选 B；成员实际 FailedScheduling 归成员调度器 | 拓扑/快照不完整时仍可能 Pending |
+| F03-04 | Dispatcher 容量账本漏计未落地授予 | 多个 Runner 被放行到资源不足的同一成员 | 高 | PL-08、PL-D02：以 Runner/Binding UID 跟踪容量暂计，直到成员 workflow Pod 实际落地并计入快照 | 后一 Dispatcher 决策不能重复使用前一授予的容量；对账不依赖 Runner CPU Pod 的 Node | 控制面异步与外部工作负载竞争仍可能影响成员容量 |
+| F03-05 | 成员容量信息过期或设备拓扑模型不完整 | Dispatcher 可能选择错误成员或长时间等待 | 高 | CapacityUnknown、保守 hold、以成员 PodScheduled/FailedScheduling 反馈更新容量 | Unknown 不得判定可放置；成员调度器仍负责实际 Node 选择 | 保守等待可能延长排队，阈值待定 |
 
 **运行诊断与敏感信息处理**：诊断时先查看成员集群的 Ready 状态与 Karmada Binding/Work，再检查成员 Pod 事件和 Secret 引用。日志不得保存 Secret 数据。
 
@@ -1654,7 +1654,7 @@ sequenceDiagram
 |---|---|---|---|---|
 | FT-01：SR-01-01 | F-01 | SP-01 | 5.1.4.1（UC-02 为异常场景） | `04-autoscalingrunnerset.yaml`、GitHub Workflow |
 | FT-01/FT-04：SR-02-01、SR-02-02 | F-02 | SP-01、SP-07 | 5.2.4.1 / 5.2.4.2 | 官方 ARC、RunnerSet、对象生命周期契约 |
-| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、定向 Karmada Scheduler/Estimator 目标接口（PL-D02） |
+| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、Dispatcher Binding hold/release、成员 NPU Pod 调度接口（PL-D02） |
 | FT-03：SR-04-01 | F-04 | SP-04、SP-05 | 5.4.4.1 | `03-rbac.yaml`、`04-autoscalingrunnerset.yaml` Listener Template |
 | FT-03：SR-05-01 | F-05 | SP-06 | 5.5.4.1 | `01-karmada-interpreter.yaml` |
 | **扩展候选：原 SR-06-01，当前非正式 SR** | F-06 | SP-02、SP-08 | 5.6.4.1 / 5.6.4.2 | 尚需设备选型；仓库未配置 NPU 扩展资源 |
@@ -1703,7 +1703,7 @@ sequenceDiagram
 | Karmada `ResourceInterpreterCustomization` 多来源识别 | 必须根据当前目标成员/对象身份过滤状态，冲突时不得宣称 Ready | 未确认目标版本的 `statusItems` 可见字段与筛选扩展点，不得标记“可直接由当前 Lua 实现” |
 | ARC Controller/Listener RBAC 最小化 | 必须根据目标版本的真实 API verbs/resources 收敛 | 当前 Controller admin kubeconfig 不符合生产目标；文档不能替代权限实施 |
 | JIT Secret 异步传播与删除 | 依赖 Pod 引用及 Karmada `propagateDeps`，清理需确认成员副本 | 不能推断所有引用形态均自动识别，或跨成员销毁是原子事务 |
-| NPU 资源容量与节点可放置性 | PL-D02 选择节点级 Filter/Score、估计器及独立 Pod 未落地容量暂计 | 目标版本是否有可行估计接口、设备拓扑、并发恢复需确认；当前 Manifest 不具备该能力，不承诺硬预约或旧 Runner 自动重选 |
+| NPU 资源容量与节点可放置性 | PL-D02：Dispatcher 选择成员并协调容量预留，成员 kube-scheduler/Volcano 选择具体 NPU Node，kubelet/Device Plugin 分配设备 | Dispatcher Binding 独占权、hooks 是否强制 Runner/workflow 同节点、成员容量估计与预留恢复仍需版本级确认；当前 Manifest 未实现 |
 | 关键路径与可用性目标 | 已定义阶段、来源、故障域和诊断契约 | 没有业务批准的时延/恢复阈值，不构成量化性能与可用性验收 |
 
 **DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；PL-D02 → F-03/QA-01、QA-04、PL-07/08、F03-03～05；ST-D01 → F-05/QA-03；QA-05～06 → SP-07/SP-09。剩余风险见 4.7.4。
