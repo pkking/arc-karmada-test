@@ -39,7 +39,7 @@
 
 **现状：** 集群按项目独占，空闲容量无法共享，任务排队。
 
-**目标：** ARC 统一供给 Runner，Dispatcher 在 Karmada 控制面按授权、容量及 FIFO/Reserve Node/Backfill 决定何时放行并选择成员，成员 Kubernetes 完成 NPU 节点调度。资源共享减少因集群割裂造成的等待；公平策略、时间窗口和目标阈值仍需批准。
+**目标：** ARC 统一供给 Runner，Dispatcher 在 Karmada 控制面按授权、容量及 FIFO/Reserve Node/Backfill 决定何时放行并选择成员，成员 Kubernetes 完成 NPU 节点调度。资源共享减少因集群割裂造成的等待；租户公平权重与等待目标仍需批准；PR/nightly 的成员调度顺序见 PL-D05。
 
 **边界：** 图为目标示意，不承诺利用率或排队收益；容量、兼容性和 NPU 驱动由部署提供。
 
@@ -984,7 +984,7 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 | Runner 注册与执行 | ARC Runner 与 GitHub Job | 注册失败、Pod Ready 但 GitHub 未确认、Job 中断/完成 |
 | 状态与回收 | 成员 Pod.status、控制面聚合、Work/Finalizer | 状态缺失/过期/多来源冲突、删除未知或残留 |
 
-**采集契约与边界**：对 Dispatcher 保留作用域、可信租户/任务类别、排队顺序、Hold 原因、受保护节点与对应队首、Backfill 决策、grant 与 PodScheduled 关联，另记录预留租约、清理及非队首占用。事件可按来源重复或乱序到达，必须保留各源原始状态与采集时刻；同一对象内以原生身份/版本判断新旧。不能要求 GitHub、ARC、Karmada 共享单一事务 ID。任何跨域阶段耗时都需明确时间基准与缺失样本处理规则；不把缺失样本当零耗时。审计只记录最小必要的非敏感标识与结果，不采集 GitHub 主 Secret、Listener Token 或 JIT 内容。现有 Manifest **未实现统一查询入口和完整指标采集**，这里只定义功能域与观测系统之间的设计契约。
+**采集契约与边界**：对 Dispatcher 保留作用域、可信租户、队列顺序、Hold 原因、受保护节点与队首、Backfill、grant 与 PodScheduled 关联；对成员 Volcano 保留真实 NPU Pod 的 PriorityClass、schedulerName 和调度事件，另记录预留租约、清理及非队首占用。事件可按来源重复或乱序到达，必须保留各源原始状态与采集时刻；同一对象内以原生身份/版本判断新旧。不能要求 GitHub、ARC、Karmada 共享单一事务 ID。任何跨域阶段耗时都需明确时间基准与缺失样本处理规则；不把缺失样本当零耗时。审计只记录最小必要的非敏感标识与结果，不采集 GitHub 主 Secret、Listener Token 或 JIT 内容。现有 Manifest **未实现统一查询入口和完整指标采集**，这里只定义功能域与观测系统之间的设计契约。
 
 **设计验证准则**：对于排队、容量不足、Secret 晚到、401/403、成员失联、状态冲突、Finalizer 阻塞七类典型问题，须能够指出相应权威源、所需关联键、不可推断的结论以及恢复责任；数据缺失时不能伪造完成或性能数据。
 
@@ -1920,4 +1920,4 @@ sequenceDiagram
 
 **统一资料来源及版本边界**：本文件 3.7 给出 ARC/GitHub Actions、Karmada、Kubernetes 官方文档索引；本仓库现有 Manifest 用于定位配置差异；任何仅有内部运行记录支持、而无上游接口规范支持的声明都应标明为集成设计假设。缺少 PoC 不构成功能设计缺口，但 **SR/接口/异常/DFX 未定义**属于设计缺口。
 
-**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 资源族与扩展资源名、公平窗口/租户权重与配额、nightly/PR Pod PriorityClass 相对取值及 Volcano Scheduler 动作、Reserve/Backfill 租约预算、故障恢复进度阈值/排他机制、性能/可用性 SLO.若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
+**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 资源族与扩展资源名、公平窗口/租户权重与配额、nightly/PR Pod PriorityClass 相对取值及 Volcano Scheduler 动作、Reserve/Backfill 租约预算、故障恢复进度阈值/排他机制、性能/可用性 SLO。若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
