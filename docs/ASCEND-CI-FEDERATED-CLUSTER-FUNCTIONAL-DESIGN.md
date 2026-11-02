@@ -572,6 +572,100 @@ sequenceDiagram
 
 **接口证据**：[Karmada Components](https://karmada.io/docs/next/core-concepts/components/)、[Karmada Scheduler Framework](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)、[Karmada Scheduler Estimator](https://karmada.io/docs/next/core-concepts/components/)、[Kubernetes kube-scheduler](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)、[Kubernetes Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)。具体 `schedulerName`、Binding 更新字段、hooks 行为和节点预留机制需按目标版本与对应代码核对；本节不修改运行代码或 Manifest。
 
+
+### 4.3.6 Dispatcher 队列、Reserve Node 与安全 Backfill（PL-D03）
+
+**目标与责任（D）**：Dispatcher 对一个联邦资源池内的待放行 Runner Binding 排序、准入、预留、回填和选择成员；Karmada 仅负责 Binding/Work 分发；**成员 kube-scheduler/Volcano 为实际 NPU workflow Pod 选择节点**。本策略解决成员间资源闲置、队首大任务长期阻塞、小任务浪费碎片的问题。**不重排 GitHub 服务端 Job 队列**；Dispatcher 的等待对象是尚未放行的 Runner `ResourceBinding`，不是已经在成员运行的 Job。
+
+| 备选 | 性质 | 设计取舍 |
+|---|---|---|
+| 严格 FIFO | 队首不满足则全部等待，顺序清晰但可能浪费空闲碎片 | 作为可对照的基线策略 |
+| 贪心 First Fit | 小任务吞吐高，但大任务可能持续被插队 | 不作为默认公平策略 |
+| **FIFO + Reserve Node + 安全 Backfill** | 队首在无法立即放置时获得容量保护，其他任务使用不受保护的资源 | **目标策略**；依赖成员预留执行契约 |
+| 仅 Karmada Filter/Score | 负责单次成员选择，无法承担跨 Binding 的 Hold、队列顺序和预留生命周期 | 不采用作为队列控制器 |
+
+**组件分工及权威状态**：
+
+| 构件 | 负责事项 | 持久化/输入输出契约 |
+|---|---|---|
+| ARC / GitHub | 产生 Runner 需求；GitHub 决定 Job 与 Runner 关联、重试及终态 | ER/ERS/Pod；Dispatcher 不创建额外 Job |
+| Karmada Detector / Binding / Work | 为 Runner Pod 形成可观察 Binding，按放行结果传播 | 目标 Binding 以 `spec.schedulerName` 定向 Dispatcher；同一 Binding 只能有一个有效写入方 |
+| Dispatcher Queue/Policy | 在同一公平作用域内维护候选、资格、次序、优先级和回填判断；只选择 Cluster | Binding UID、队列时间、资源族、可信租户/任务类别及版本；无匹配候选时继续 Hold |
+| Capacity Ledger | 节点可用容量估算、未落地授予、其他负载占用、预留与成员观测一致性 | `allocatable - bound - inflight - background`；账本异常停止新的肯定放行判断 |
+| Reservation Actuator | 在成员候选节点建立、续租及撤销容量保护约束 | 有限范围的 Node taint/annotations、归属身份、队首标识、逻辑过期和短租约 |
+| 成员 Scheduler / kubelet | 实际 NPU Pod 的 Filter/Score/Bind 与 Device Plugin Allocate | PodScheduled/NodeName/设备结果为最终事实；Dispatcher 的预留节点不等于实际绑定节点 |
+
+**队列身份、作用域与顺序**：
+
+1. 队列按可互换的**联邦资源族/拓扑域**定义，不跨无法共享设备、网络约束或租户授权的资源池拼接。成员资格先过滤，队列排序后不得越权扩大候选集。
+2. 入队时间采用 Dispatcher **首次可信观察时刻**并持久化关联 Runner/Binding UID；相同时间以固定键确定顺序。`queued-since` 是目标逻辑字段，不伪称为官方 Karmada 字段。ARC 删除重建 Runner 时，仅在可验证同一等待需求及授权关系后恢复原先队列位置；禁止仅凭同名对象继承。
+3. **同一租户、同一优先级内 FIFO**；跨租户采用可配置的公平仲裁（按已获分配 NPU 卡时、权重/配额和等待时长定义），不能以单一全局 FIFO 冒充已满足跨租户公平。权重与最小保障为 P 类策略参数；只有具备可信租户归属和资源计量时才能宣称公平策略生效。
+4. **分时优先级（目标）**：支持在已批准的时段内白天 PR 类优先、夜间 nightly 类优先；时区、时间窗口和优先级映射为 P 类，切换点重算**未放行队列**，不抢占已运行的 Pod。优先级只改变仲裁顺序，不允许无限期压制另一类任务；用等待时长老化/最小服务份额约束饥饿风险。
+5. **分类的可信前提**：在 Runner Binding 生成时 GitHub Job 属性未必可见；必须由可信且已授权的 Runner 服务映射、Workflow/Event 关联契约提供 tenant/class。若无法证明 PR/nightly 分类，按默认类别处理并标记 `ClassUnknown`，**不得宣称分时优先已生效**；不能以用户可随意修改的标签直接作为高优先级凭证。
+
+**单次决策与放行**：
+
+1. 收集已入队且未取消的 Binding，确认唯一调度者、成员健康和账本快照；恢复阶段先对账持久化未落地授予与预留。
+2. 在当前优先级/公平轮次内确定队首；计算合格成员下的**单节点可放置容量候选**，而非跨 Node/Cluster 累加。若队首已有 Feasible 容量，选择成员并使用资源版本前置条件放行 Binding。
+3. 若队首暂不可行且达到已批准的预留触发条件，选择一个具备完整硬件容量但因可回收占用尚不可放置的**候选节点**，通过 Actuator 施加特定资源族的保护；不直接修改目标 workflow Pod 的 `nodeName`。若节点已有不受控长期占用或容量未知，不得承诺能靠等待排空。
+4. 允许其他任务在**不消耗保留容量、不会抢走队首保护节点、不会突破授权/公平上限**时 Backfill。已启用某资源组预留时，该组其他 Runner 保持 Hold，防止共享 Toleration 的后继任务越过队首。
+5. 放行必须提交**唯一 Cluster**的 Binding 写入与持久化 grant，更新 ledger；若资源版本冲突、对象已取消、授权/策略发生变化，则重新读取并决定，不因失败创建第二份 Runner。
+6. Runner 到成员后，只有实际 NPU workflow Pod 绑定并被容量快照覆盖，才能从“未落地授予”转换为“已占用”。等待成员反馈不代表 GitHub Job 正在运行；异常按 PL-D01、PL-D02 处理。
+
+**Reserve Node 安全条件（D）**：
+
+- **候选节点**：必须是该资源族的授权成员、可容纳完整请求且能被成员真实 Scheduler 接纳的 Node；Actuator 仅允许在白名单 NPU Node 修改预留 taint。禁止抢占、驱逐已有 Job 或盲目抢注其他调度器的预留。
+- **保护机制**：Node `NoSchedule` taint + 受信任的特定 reservation group 的精确 `Equal` toleration；禁止 `Exists` 通配。同组后继 Runner 也可能具有相同 toleration，必须由 Dispatcher **同时执行同组 Hold**；仅配置 taint 不能证明队首安全。
+- **时钟和失效**：逻辑预留到期时间与短租约 `reserved-until` **独立**；Dispatcher 持续续租，成员 Janitor 在归属和期限核验后清理过期保护。自动回收必须阻止 Dispatcher 死亡造成长期资源冻结。具体 TTL/续租/巡检时间为 P 类，不借用其他项目的示例数值冒充业务目标。
+- **生命周期**：`Eligible → Reserved → Draining → HeadReleased → WorkflowBound → Released`；队首取消、失去资格、节点故障、超时、Dispatcher 切主、预留被其他调度器占用必须分别有清理/重建分支。**仅 Dispatcher 放行 Runner、成员 Pod 已 Bound 不等于本预留成功完成**；需要关联被保护的队首实际 NPU Pod 的节点状态。
+- **回填不变量**：在队首等待期间，任何 Backfill Job 不得占用为队首保留的设备容量，也不得延后既定的队首放行承诺。无可信执行时长上界时只使用**完全独立的非预留容量**回填；不能靠猜测“小任务会先结束”作为安全条件。
+
+**调度交互（目标，不是现有 API 调用记录）**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ARC as ARC / ER
+    participant K as Karmada Binding/Work
+    participant D as Dispatcher Policy
+    participant L as Ledger / Reserve Actuator
+    participant M as Member Scheduler
+    ARC->>K: 创建 Runner Pod 对应待放行 Binding
+    K-->>D: 可观察的待调度 Binding
+    D->>D: 队列身份/公平/优先级排序
+    D->>L: 读取成员容量、授予与预留
+    alt 队首可放置
+        D->>K: 放行唯一 Cluster + grant
+    else 队首不可放，具备安全预留条件
+        D->>L: 选择候选 Node，施加/续租预留保护
+        Note over D,L: 对该 reservation group 的后继任务继续 Hold
+        opt 其他任务有独立非预留容量
+            D->>K: 安全 Backfill 放行其他 Runner 的 Binding
+        end
+    else 全部不可行或状态未知
+        Note over D,K: Hold 并记录原因；不复制 Runner/Job
+    end
+    K->>M: 已放行 Runner Pod 分发至选中成员
+    M->>M: 为真实 NPU workflow Pod 选择 Node
+    M-->>L: Pod 绑定与容量反馈
+    L-->>D: 更新 grant、预留与队列快照
+```
+
+**故障域、恢复和退化契约**：
+
+| 事件 | 必须执行的响应 | 不能做的事 |
+|---|---|---|
+| Dispatcher Leader/进度丢失 | 以 Lease/进度区分活锁和主备；新 Leader 从 Binding、grant 与成员 Node 事实重建，重建未完成前禁止放行；Janitor 清理未续租保护 | 并发两个 Writer 改同一 Binding；仅凭内存队列恢复原队首 |
+| Dispatcher 不可用超过恢复窗口 | 启用**互斥**的降级调度路径；明确先停止旧 Writer，再允许官方 Scheduler/应急实例接管；降级期间 FIFO/Reserve 语义可能弱化，需显式告警 | 在旧预留仍生效、授权未知时盲目按聚合容量释放所有任务 |
+| 队首取消或 ARC 回收等待中的 ER | 按绑定身份从 Hold 队列移除，关闭对应 grant，核对并撤销预留；队列不会自行创建替代 Job | Dispatcher 与 ARC 并行删除同一等待需求，误删后继 Runner |
+| 预留 Taint 残留或被非队首占用 | 记录 `ForeignEngagement`；禁止假称 Reserve 生效，按归属/租约清理并重新判定是否能安全预留 | 用 `Exists` 容忍、增加无限租期或越权强制迁移正在运行的 Pod |
+| 成员失联、调度事件滞后或容量估计分歧 | 标记 `CapacityUnknown`，冻结相关成员新的肯定放行，保留其他成员的可信候选；观察恢复并对账 | 用旧节点空闲数直接作为确认授予 |
+| 队首跨优先级时段或长期等待 | 仅重排未放行 Binding，保留已生效的保护承诺；通过老化与最小服务规则防止持续饥饿 | 删除运行 Pod、撤销有效队首预留来强制改优先级 |
+
+**DFX 设计证据和待选参数（P）**：分成员/资源族/租户/任务类别统计队列长度、队首等待、Hold 原因、分配卡时、Backfill 数、被保护容量、预留实际兑现、意外占用、租约过期、Leader 切换与容量快照滞后。区分 `GitHub queued → started` 与 `Binding hold → release`，后者是 Dispatcher 自身等待，不可写成 GitHub 原生排队时间。优先级时间窗口、权重/公平阈值、预留时长、故障切换时限、最大排队时间和利用率目标均需正式批准；没有证据不填写性能承诺。
+
+**现有可复用设计**：组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；本节将其作为设计参考，**不将其代码或部署状态自动视为本仓库已实现**。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
+
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
 
 ### 4.4.1 实现思路
