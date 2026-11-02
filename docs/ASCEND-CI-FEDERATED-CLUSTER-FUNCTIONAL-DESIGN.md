@@ -1467,6 +1467,10 @@ sequenceDiagram
 | F03-07 | Node 预留泄漏或租约清理失效 | 可用 NPU 节点永久闲置 | 高 | PL-10/12；归属标记、短租约续期、成员 Janitor、预算限制 | Leader 死亡后短租约到期可判定清理；错误归属不得被自动接管 | 成员控制面/Janitor 同时故障时仍可能残留 |
 | F03-08 | 同组后继绕过 Hold、宽泛 toleration 抢占队首 | 预留失效、队首饥饿 | 高 | PL-10/11；仅匹配 group 的 Equal Toleration、同组 Hold、预留违规观察 | 容忍 Exists/未 Hold 均不满足验收；出现非队首占用必须告警 | 与未纳管调度器之间存在共存约束 |
 | F03-09 | 多写者或恢复未对账就放行 | 任务重复传播、账本偏差 | 严重 | PL-12；唯一 Binding 写者、Leader/进度检测、Grant 重建、降级互斥 | 切主前后同 Binding 不能由两个写者放行；未知容量不进入新放行 | Lease 抖动及网络分区导致短时不可用 |
+| F03-10 | 按任务数量轮转而忽略 NPU 卡时与租户权重 | 小任务与大任务被错误等价，公平性失真 | 高 | PL-14、PL-D04：按真实 NPU 工作负载的卡时计量，grant 单独占容量预算 | 16 卡×1h 与 2 卡×1h 获得不同的服务量；跨设备家族分别计算 | 不可放置的大任务与非抢占长任务仍影响短期公平 |
+| F03-11 | 从非可信标签/启动后元数据推测 PR/nightly 类别 | 任务虚假升权，低优先级长期饥饿 | 高 | PL-15、PL-D05：只接受放行前唯一可信 Job→Binding 关联 | 相同 runs-on 不可映射时按 ClassUnknown 普通类别；绝不按猜测升权 | 目标 ARC 版本未证明具备预调度一一映射 |
+| F03-12 | Watchdog 只依据后台 Lease 判活 | Dispatcher 持续 Hold，排队 SLO 失效 | 高 | PL-16、PL-D06：决策进度与主动容量健康检查 | 决策循环停止但续约正常时，进入 RECOVERING/降级状态或 FAIL_CLOSED | 业务恢复阈值仍待批准 |
+| F03-13 | 降级接管时旧 Writer 仍能写 Binding | 多 Cluster 传播及对象身份争用 | 严重 | PL-16/17、PL-D06：接管前确认旧 Writer 已失效，重建 grant，更新版本冲突重查 | 旧 Writer 无法被排他时不进入 DEGRADED；不得并行更新同一 Binding | 网络分区下可用性降低，安全优先 |
 
 **运行诊断与敏感信息处理**：诊断时先查看成员集群的 Ready 状态与 Karmada Binding/Work，再检查成员 Pod 事件和 Secret 引用。日志不得保存 Secret 数据。
 
