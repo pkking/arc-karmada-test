@@ -690,23 +690,29 @@ sequenceDiagram
 
 **设计反例**：租户甲的 16 卡任务与乙的 2 卡任务不能按“每人各获得一个任务”认作公平；已经执行 16 卡×1 h 的服务量高于 2 卡×1 h。若甲的队首因拓扑无法运行，乙可以在独立资源 Backfill，但不得消费甲的有效预留。某租户身份缺失时不得继承其他租户的剩余配额或高权重。
 
-### 4.3.8 PR/nightly 可信分类与分时优先级（PL-D05）
+### 4.3.8 成员 Volcano 通过 PriorityClass 设置任务优先级（PL-D05）
 
-**设计决策（D）**：Dispatcher 优先级必须依据**放行前可验证、与本 Binding 一一关联**的授权任务类别。用户填写的 `runs-on` 标签仅是 Runner 服务选择，不能单凭标签认定当前 Job 是 PR/nightly。保持用户现有 `runs-on` 接口不变；默认不可判定时按普通类别处理，不伪造优先级身份。
+**架构决策（D）**：**PR/nightly 的任务优先级归成员 Volcano，不归 Dispatcher。** nighty（nightly）实际申请 NPU 的 Pod 在成员集群创建时声明低优先级 `spec.priorityClassName`；PR Pod 使用更高的优先级或正常默认级。Dispatcher 继续做跨成员容量准入、FIFO、Reserve Node、Backfill 和租户公平，不读 GitHub Job 的 PR/nightly 类型，也不要求 Job→Runner→Binding 的预调度唯一关联。
 
-| 路径 | 可行性与风险 | 结论 |
+**复用机制**：`PriorityClass` 是 Kubernetes 原生、集群作用域的资源；Volcano 的 Priority Plugin 在其调度范围内对 Job/Pod 进行优先级排序。只有真正执行 NPU 任务的 Pod（container mode 下通常是 hooks 创建的 workflow Pod；否则可能是 Runner Pod）带有 `priorityClassName`、通过 `schedulerName: volcano` 等经实际版本确认的调度入口进入 Volcano，才能应用这种节点级优先级。仅在 CPU Runner Pod 上设置优先级，不能替代 NPU workflow Pod 的优先级。
+
+| 设计输入 | 责任主体与规则 | 约束 |
 |---|---|---|
-| 按 `runs-on`/Pod 自定义 Label 猜测 PR 或 nightly | 相同 Scale Set 服务不同任务，标签可被提交者修改，且 Binder 创建时 Job 信息可能尚不可见 | **不采用作可信来源** |
-| 对已经启动的 Job 使用 ARC `JobID` / workflow 信息反推待放行 Runner | Job 关联通常发生在 Runner 可接单后，时序晚于调度决策 | **不能保证预调度分类** |
-| **经授权的预调度需求元数据契约** | 由可信 Listener/工作流事件接入层提供 job-key、repository、事件类别、信任域和匹配身份，关联到确切待调度 Binding；须定义先于放行的身份一致性 | **目标选型；必须确认上游可获取性，未确认前禁用类别差异化** |
+| nightly 的任务 Pod | 工作流/Pod 模板或可信 hooks 在**成员 Pod 创建时**写入低优先级 `priorityClassName` | 类名存在于成员集群；声明位置在实际 NPU Pod 而非联邦 Binding |
+| PR 的任务 Pod | 不设置低优先级，或使用经授权的高优先级类 | 同一成员 Volcano 调度队列中，PR 排在低优先级 nightly 前；不可由任意来源滥用高优先级 |
+| Volcano | 启用版本兼容的 `priority` plugin；依据 Node 资源和拓扑完成成员内调度 | `PriorityClass` 不能让 Dispatcher 重排尚未放行的 Runner Binding |
+| 不抢占现有任务 | 目标是优先调度**待运行**任务，不驱逐正在运行的 nightly | 目标 Volcano 调度配置不得开启会对现有 NPU Pod 造成抢占/回收的 `preempt` / `reclaim` 路径；`preemptionPolicy: Never` 仅约束该类 Pod **主动发起抢占**，并不防止其他高优先级 Pod 抢占它 |
 
-**分类契约及安全门槛**：权威输入至少包含 `provider, repository, workflowRunId, jobId, attempt, eventType, jobClass, tenantId, runnerServiceId, issuedAt, expiry, provenance`（仅设计逻辑字段，**不是 ARC/Karmada 原生字段清单**）；`jobClass` 由受信任平台分类器根据已授权事件与规则产生。接入组件需建立 job-key → 待供给 Runner demand → ER/Pod → Binding UID 的唯一可验证映射，跨回调重试与重建保证幂等；**如果一个 Scale Set 无法把 queued Job 一一映射至 Runner Binding，不能制造这种映射**。当来源冲突、签发已过期、多对一、多对多、无提前分类时，返回 `ClassUnknown` 并采用普通类别；不得提升到 PR 高优先级。
+**静态优先级的语义**：较低的 nightly PriorityClass 表示 **PR 总体优先于 nightly 的成员内等待顺序**，并不意味着夜间 automatically 把 nightly 调为高优先级。如未来要实现“白天 PR 优先、夜间 nightly 反过来优先”，需要另行设计成员层的动态策略或不同任务提交策略；**不应因此把任务类别识别搬回 Dispatcher**。
 
-**分时窗口**：目标支持本地业务时区的白天 PR 优先、夜间 nightly 优先；使用 IANA 时区及明确起止时间，跨夏令时由统一规则转换；变更需可审计的 `policyVersion`。时间窗变化只重排尚未放行的 Binding；已放行 NPU Pod、已保护的队首预留不被抢占或撤销。优先级按 `Class → EffectivePriority(now,age,policyVersion)` 计算；老化上限及最低服务份额是 P 类参数。高优先级不能无限推迟低类，公平依 PL-D04 限制单租户独占。
+**边界与反例**：
 
-**不可绕过的判断**：同一 `runs-on` 服务同时收到 PR/nightly，且预调度 job-key 无法绑定到某 Runner 时，两个 Binding 都是 `ClassUnknown`；**本方案这时只能按默认 FIFO/公平执行，不能声称已经完成白天 PR 优先、夜间 nightly 优先**。若业务明确要求这种体验而上游缺少映射，需先批准独立可信任务准入/关联机制的接口设计；不能通过改优先级字符串绕过身份缺口。
+1. Dispatcher 已经 Hold 住尚未创建在成员的 PR 工作负载时，Volcano 还看不到该 Pod，`PriorityClass` **无法对联邦等待队列生效**。因此这一方案只保证**成员内已提交的待调度 Pod** 依优先级排序，不保证 GitHub 端到端 PR 排队必然比 nightly 短。
+2. nightly NPU Pod 已运行而高优先级 PR 后到，**不启用抢占**时，PR 必须等待资源自然释放；高优先级只影响后续调度顺序。
+3. 若 nightly workflow Pod 的 `schedulerName` 未指向 Volcano，或 hooks 丢失 `priorityClassName`，该机制不生效，应保留告警与实际 Pod Spec/事件证据。若使用 VolcanoJob/PodGroup，需校验 Job 与 Pod 优先级一致。
+4. Dispatcher 的 Reserve Node taint/同组 Hold 仍生效；Volcano 的 Priority Plugin 不能解除污点、成员授权或独立 Runner 的联邦预留。两级调度只共享资源容量和实际 Pod 调度反馈。
 
-**证据**：[ARC Job metadata labels proposal #4485](https://github.com/actions/actions-runner-controller/issues/4485) 是“Job 关联后同步元数据”的社区请求，**不能证明放行前可得 Job 类别**；目标 ARC 版本的 Listener/ER 生命周期须单独核对。
+**官方依据**：[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Actions：Allocate、Preempt 与 Reclaim](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass 与非抢占优先级](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。具体优先级数值、PriorityClass 名称、Volcano scheduler 配置及 Pod 模板来源是部署参数；**本设计不要求 Dispatcher 增加 Job 识别接口**。
 
 ### 4.3.9 Dispatcher 故障接管与安全降级（PL-D06）
 
