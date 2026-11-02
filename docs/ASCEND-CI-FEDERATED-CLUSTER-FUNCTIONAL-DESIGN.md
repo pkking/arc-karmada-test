@@ -1218,37 +1218,33 @@ Controller 创建 Pod；Karmada 选成员、分发 Pod 和依赖；成员挂载 
 ```mermaid
 sequenceDiagram
     autonumber
-    box rgb(255,240,222) Runner 资源入口
-        participant C as ARC Controller
-        participant API as Karmada API
+    participant C as ARC Controller
+    participant K as Karmada Detector/Binding
+    participant D as Dispatcher
+    participant A as Ledger/Actuator
+    participant W as Karmada Work
+    participant M as Member kube-scheduler/Volcano
+    C->>K: 创建 Runner Pod，Detector 形成 Binding
+    K-->>D: 可观察到待放行 Binding
+    D->>D: 确认可信队列身份，按公平与优先级确定队首
+    D->>A: 读取容量、grant 与预留状态
+    alt 队首当前可放置
+        D->>K: 指定唯一成员并放行 Binding
+        K->>W: 按 Cluster 产生 Work
+        W->>M: 分发 Runner Pod/JIT 依赖
+        M->>M: NPU workflow Pod 由成员调度器绑定 Node
+        M-->>A: NPU PodScheduled/设备事实供账本对账
+    else 需要队首预留
+        D->>A: 在合格成员候选 Node 建立租约/taint
+        Note over D,A: 同组后继 Hold，其他任务只用独立容量 Backfill
+        opt 其他任务可安全回填
+            D->>K: 放行另一个 Runner 的 Binding
+        end
+    else 无合格成员或容量 Unknown
+        Note over D,K: 保持 Binding 未放行，记录等待原因
     end
-    box rgb(232,243,255) Karmada 联邦编排
-        participant P as PropagationPolicy
-        participant D as Detector
-        participant S as Karmada Scheduler
-        participant B as Binding / Work
-    end
-    box rgb(231,249,239) 成员执行
-        participant M1 as member1
-        participant M2 as member2
-    end
-
-    C->>API: 创建 Runner Pod
-    API->>P: 根据选择器匹配 arc-runner-pod-propagation
-    Note over P,S: clusterAffinity 允许 member1 和 member2，Divided / Weighted 按各 Pod 分别决策
-    D->>API: 观察待传播的 Runner Pod
-    D->>B: 创建 ResourceBinding
-    S->>B: 写入选定的成员集群 Placement
-    B->>M1: 通过 Work 下发到 member1（被选中时）
-    opt 另一个独立 Pod 被调度至 member2
-        B->>M2: 通过 Work 下发到 member2（被选中时）
-    end
-    M1->>M1: 原生 kube-scheduler 选择节点并执行
-    M2->>M2: 如收到 Pod 则在本集群执行
-    Note over S,M2: 不保证多个独立 Pod 在每轮按固定比例均匀分布
-    Note over C,API: Karmada 选择成员集群，成员 kube-scheduler 负责节点级调度
+    Note over K,M: Dispatcher 选成员及放行，成员 Scheduler 选 NPU Node
 ```
-
 
 
 #### 5.3.4.2 UC-06 JIT Secret 晚到后的依赖恢复——运行时序（US-04）
