@@ -599,9 +599,9 @@ sequenceDiagram
 
 1. 队列按可互换的**联邦资源族/拓扑域**定义，不跨无法共享设备、网络约束或租户授权的资源池拼接。成员资格先过滤，队列排序后不得越权扩大候选集。
 2. 入队时间采用 Dispatcher **首次可信观察时刻**并持久化关联 Runner/Binding UID；相同时间以固定键确定顺序。`queued-since` 是目标逻辑字段，不伪称为官方 Karmada 字段。ARC 删除重建 Runner 时，仅在可验证同一等待需求及授权关系后恢复原先队列位置；禁止仅凭同名对象继承。
-3. **同一租户、同一优先级内 FIFO**；跨租户采用可配置的公平仲裁（按已获分配 NPU 卡时、权重/配额和等待时长定义），不能以单一全局 FIFO 冒充已满足跨租户公平。权重与最小保障为 P 类策略参数；只有具备可信租户归属和资源计量时才能宣称公平策略生效。
-4. **分时优先级（目标）**：支持在已批准的时段内白天 PR 类优先、夜间 nightly 类优先；时区、时间窗口和优先级映射为 P 类，切换点重算**未放行队列**，不抢占已运行的 Pod。优先级只改变仲裁顺序，不允许无限期压制另一类任务；用等待时长老化/最小服务份额约束饥饿风险。
-5. **分类的可信前提**：在 Runner Binding 生成时 GitHub Job 属性未必可见；必须由可信且已授权的 Runner 服务映射、Workflow/Event 关联契约提供 tenant/class。若无法证明 PR/nightly 分类，按默认类别处理并标记 `ClassUnknown`，**不得宣称分时优先已生效**；不能以用户可随意修改的标签直接作为高优先级凭证。
+3. **同一租户、同一优先级内 FIFO**；跨租户采用 **PL-D04 的已分配 NPU 卡时/租户权重** 仲裁，按资源族分别计量。未落地授予单独计入容量预算，不等于已完成服务。
+4. **分时优先级（目标）**：仅在 PL-D05 所需的可信预调度分类可用时，执行批准时段内白天 PR、夜间 nightly 优先；只重排未放行队列，保留已有预留与正在执行任务。窗口、老化门槛和服务份额为 P 类。
+5. **分类的可信前提**：PL-D05 要求可信 Job 需求与 Runner/Binding 的唯一映射；在放行前无法证实时以 `ClassUnknown` 普通类别处理，不得凭用户自定义 Label 授予高优先级。
 
 **单次决策与放行**：
 
@@ -665,6 +665,81 @@ sequenceDiagram
 **DFX 设计证据和待选参数（P）**：分成员/资源族/租户/任务类别统计队列长度、队首等待、Hold 原因、分配卡时、Backfill 数、被保护容量、预留实际兑现、意外占用、租约过期、Leader 切换与容量快照滞后。区分 `GitHub queued → started` 与 `Binding hold → release`，后者是 Dispatcher 自身等待，不可写成 GitHub 原生排队时间。优先级时间窗口、权重/公平阈值、预留时长、故障切换时限、最大排队时间和利用率目标均需正式批准；没有证据不填写性能承诺。
 
 **现有可复用设计**：组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；本节将其作为设计参考，**不将其代码或部署状态自动视为本仓库已实现**。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
+
+
+### 4.3.7 跨租户加权公平仲裁（PL-D04）
+
+**设计决策（D）**：Dispatcher 在 PL-D03 的**可互换 NPU 资源族/拓扑域**内做跨租户加权公平仲裁；各租户在相同有效优先级内按 FIFO 取出候选。公平计量用**已分配 NPU 卡时**而非 AI Core 利用率或 GitHub Job 数量；成员容量、拓扑和授权是硬约束，公平排序不得越过硬性准入。该机制不改变 GitHub 队列，也不抢占已运行 Pod。
+
+| 备选机制 | 结论 |
+|---|---|
+| 全局 FIFO | 容易因单租户大任务占据长期队首，不能表达不同租户配额；仅作为顺序基线 |
+| 仅按任务数轮转租户 | 2 卡任务和 16 卡任务成本不同，不适用于异构 NPU 池；不采用 |
+| 基于 CPU/NPU 混合资源的 DRF | 适合多资源竞争，但本设计的仲裁目标是同型号 NPU 卡时；CPU 仍作为准入约束，不在此引入无法比较的跨设备资源权重 |
+| **按资源族计量的 Weighted Fair Service（加权服务量）** | **选择为目标仲裁算法**：资源分配量和时间均入账，允许定义各租户权重，符合单个 NPU 资源维度的公平目标 |
+
+**作用域与输入**：公平域是 `(federation, NPU-family, topology-domain)`；不同设备型号/资源单位不能未经批准合并为一项卡时。租户身份来自经授权的 Runner 服务/资源池访问配置，必须在 Runner Binding 进入队列时可信可见；`tenantId` 为空或来源不可验证则进入默认受限租户，不享受额外权重。`weight(t) > 0` 由平台批准，默认权重策略必须显式定义；分配上限、保底与借用策略属于 P 类。
+
+**计量和选择（D）**：
+
+1. 对公平窗口 `W`，记租户已消耗服务量 `A(t,W)=Σ[实际 NPU 请求卡数 × NPU 工作负载占用秒数]`（单位：NPU 卡秒）；以真实 NPU workflow Pod 的请求和运行时间为事实，缺失结束事件不填零。任务已放行但 NPU Pod 尚未绑定的 grant 另入 `I(t)`，用于并发放行限额/超售控制，**不能将它当作已完成服务量**。保护中的预留 `R(t)` 计入资源预算和公平配额占用，避免单租户长期冻结其他租户容量，但不得重复计入 `A`。
+2. 活跃且具备合格成员容量的租户按 `A(t,W)/weight(t)` 从小到大选择；同值采用稳定租户 ID；每租户优先选择**有效优先级最高、同级最早入队**的候选 Binding。窗口老数据过期且新需求到来时正常参与竞争，不继承不可追踪的历史债务。
+3. 同一轮决定内先检查有效优先级（PL-D05）、资源授权和配额，再进行加权公平；对低于当前优先级但等待时间达到已批准的老化门槛的任务进行有限提升，避免跨类别长期饥饿。高优先级任务也不得打破成员授权或既有队首预留。
+4. 队首因资源碎片化不可放置时，遵守 PL-D03 的 Reserve Node/安全 Backfill；回填任务仍需经过租户配额与公平排序，且不能因自己总是能放置而连续绕过同一被保护队首。
+5. 仅在资源供给可行、成员调度有进展、长期运行任务最终释放资源、类别与租户身份可靠时，才能讨论长期公平收敛。**不承诺短期严格比例、固定等待上界或在无抢占条件下绝对不饥饿**。公平窗口 `W`、配额上限、权重和老化阈值必须批准后才能确定量化目标。
+
+**设计反例**：租户甲的 16 卡任务与乙的 2 卡任务不能按“每人各获得一个任务”认作公平；已经执行 16 卡×1 h 的服务量高于 2 卡×1 h。若甲的队首因拓扑无法运行，乙可以在独立资源 Backfill，但不得消费甲的有效预留。某租户身份缺失时不得继承其他租户的剩余配额或高权重。
+
+### 4.3.8 PR/nightly 可信分类与分时优先级（PL-D05）
+
+**设计决策（D）**：Dispatcher 优先级必须依据**放行前可验证、与本 Binding 一一关联**的授权任务类别。用户填写的 `runs-on` 标签仅是 Runner 服务选择，不能单凭标签认定当前 Job 是 PR/nightly。保持用户现有 `runs-on` 接口不变；默认不可判定时按普通类别处理，不伪造优先级身份。
+
+| 路径 | 可行性与风险 | 结论 |
+|---|---|---|
+| 按 `runs-on`/Pod 自定义 Label 猜测 PR 或 nightly | 相同 Scale Set 服务不同任务，标签可被提交者修改，且 Binder 创建时 Job 信息可能尚不可见 | **不采用作可信来源** |
+| 对已经启动的 Job 使用 ARC `JobID` / workflow 信息反推待放行 Runner | Job 关联通常发生在 Runner 可接单后，时序晚于调度决策 | **不能保证预调度分类** |
+| **经授权的预调度需求元数据契约** | 由可信 Listener/工作流事件接入层提供 job-key、repository、事件类别、信任域和匹配身份，关联到确切待调度 Binding；须定义先于放行的身份一致性 | **目标选型；必须确认上游可获取性，未确认前禁用类别差异化** |
+
+**分类契约及安全门槛**：权威输入至少包含 `provider, repository, workflowRunId, jobId, attempt, eventType, jobClass, tenantId, runnerServiceId, issuedAt, expiry, provenance`（仅设计逻辑字段，**不是 ARC/Karmada 原生字段清单**）；`jobClass` 由受信任平台分类器根据已授权事件与规则产生。接入组件需建立 job-key → 待供给 Runner demand → ER/Pod → Binding UID 的唯一可验证映射，跨回调重试与重建保证幂等；**如果一个 Scale Set 无法把 queued Job 一一映射至 Runner Binding，不能制造这种映射**。当来源冲突、签发已过期、多对一、多对多、无提前分类时，返回 `ClassUnknown` 并采用普通类别；不得提升到 PR 高优先级。
+
+**分时窗口**：目标支持本地业务时区的白天 PR 优先、夜间 nightly 优先；使用 IANA 时区及明确起止时间，跨夏令时由统一规则转换；变更需可审计的 `policyVersion`。时间窗变化只重排尚未放行的 Binding；已放行 NPU Pod、已保护的队首预留不被抢占或撤销。优先级按 `Class → EffectivePriority(now,age,policyVersion)` 计算；老化上限及最低服务份额是 P 类参数。高优先级不能无限推迟低类，公平依 PL-D04 限制单租户独占。
+
+**不可绕过的判断**：同一 `runs-on` 服务同时收到 PR/nightly，且预调度 job-key 无法绑定到某 Runner 时，两个 Binding 都是 `ClassUnknown`；**本方案这时只能按默认 FIFO/公平执行，不能声称已经完成白天 PR 优先、夜间 nightly 优先**。若业务明确要求这种体验而上游缺少映射，需先批准独立可信任务准入/关联机制的接口设计；不能通过改优先级字符串绕过身份缺口。
+
+**证据**：[ARC Job metadata labels proposal #4485](https://github.com/actions/actions-runner-controller/issues/4485) 是“Job 关联后同步元数据”的社区请求，**不能证明放行前可得 Job 类别**；目标 ARC 版本的 Listener/ER 生命周期须单独核对。
+
+### 4.3.9 Dispatcher 故障接管与安全降级（PL-D06）
+
+**设计决策（D）**：正常态由 Dispatcher 独占其 `schedulerName` 对应 Binding 的 Hold/Release/Cluster 选择。故障时先尝试**同等语义的另一 Dispatcher Leader 接管**；仅在新 Leader 不能恢复且由明确的健康判据触发时，才允许互斥的 break-glass 官方 Karmada Scheduler 用同一 `schedulerName` 恢复基本成员放置。**降级可损失 FIFO、跨租户公平、Reserve/Backfill，但不能丢失成员授权、NPU 请求与已绑定 Runner 的单目标/不重复执行约束。**
+
+| 状态 | 进入证据与允许操作 | 不变量与退出条件 |
+|---|---|---|
+| `ACTIVE` | 唯一 Dispatcher Leader 的进度新鲜；账本与成员容量可信 | Dispatcher 是唯一 Binding Writer，正常按 PL-D03～05 排序、保护及放行 |
+| `RECOVERING` | Leader 进度丢失、租约易主或 Provider 账本不可信 | 暂停新的 release；从 Binding、grant、成员 Pod/Node、预留标记重建队列和容量，完成核对后才回到 ACTIVE |
+| `DEGRADED` | 进度/恢复超出已批准的控制面阈值，watchdog 确认旧 Dispatcher 已失去写入权 | 官方 Karmada Scheduler 以**相同 schedulerName** 处理仍待调度 Binding，仅在合格成员中按可实现的安全容量约束放置；明示公平/预留策略降级 |
+| `FAIL_CLOSED` | 无法证明单写者互斥、授权成员/容量事实可信或原有预留约束安全 | 禁止新的 Binding 放行；允许现有 Pod 在成员层继续原生调度和清理；人工排除歧义后再切换 |
+| `RESTORING` | Dispatcher 恢复、正常版本/配置一致，且应急实例已确认停止写入 | 重建账本、队列和活跃保护，修正异常 grant；验证唯一 Writer 后恢复 ACTIVE，不重新处理已经成功放行的 Binding |
+
+**接管顺序和 Fencing 契约**：
+
+1. **健康证据必须包括调度进度**，不能只检查 Leader 进程存活或后台自动续约的 Lease；需要 `lease freshness`、`last placing progress`、成员状态采集新鲜度、循环调谐超时及 API 写入故障。空闲联邦允许无放行动作，但必须仍有成功决策循环/主动健康探测，避免“没有任务”被误判为卡死。
+2. Leader 只有在自己的租约和写入期限均有效时才可发送 Binding/Node 写入；租约失效需停止写入并释放身份。Watchdog 触发 break-glass **必须先完成旧 Writer 禁止写入的可验证条件**（进程停止或 fencing/权限收回），仅将另一 Deployment 扩至 1 并不足以自动证明网络分区下不存在双写。
+3. 新 Leader 在放行前重建未落地 grant 与 Node 预留，核对实际 PodScheduled 和租约；未完成先 `RECOVERING`，不要让内存状态为空就认为资源全部空闲。乐观并发更新检查 Binding `resourceVersion`，冲突必须重新读取而不是双份提交。
+4. break-glass 使用与目标 `ResourceBinding.spec.schedulerName` 相同的调度器名，并以目标版本确认能实际处理该 GVK、`Divided` 独立 Pod 单目标、容量 Estimator 开关与约束。若目标版本无法安全处理或需要覆盖未知预留，进入 FAIL_CLOSED。它不管理 Dispatcher 的全局 FIFO/同组 Hold，**不能宣称降级仍保有原公平与队首预约保证**。
+5. 恢复时先停止应急 Writer，再归并尚未放行 Binding 和被打断的预留；已在成员运行的 Runner 保持单目标，不因集成层恢复而复制或重派 GitHub Job。逻辑预留可释放但 Node taint 必须以归属与短租约安全撤销；成员 Janitor 负责失去 Dispatcher 续租后的清理。
+6. 故障切换时长、进度阈值、授权/账本一致性条件和控制面超时必须作为 P 类参数批准。宁可新增任务等待，也不能通过不可信容量或双写来追求虚假的可用性。
+
+**DFX 静态反例**：
+
+| 反例 | 设计预期 | 失败判据 |
+|---|---|---|
+| Leader Lease 仍被后台续约，决策循环已停止 | 进度 Watchdog 判定不可用并触发接管/FAIL_CLOSED | 仅看 Lease 判为健康，全部新 Runner 永久 Hold |
+| 两个节点网络分区，旧 Dispatcher 仍可访问 Karmada API | 只有完成旧 Writer Fencing 才允许应急实例写 Binding | 同一 Binding 先后被两个 Writer 改写到不同 Cluster |
+| 冷启动观察不到先前 grant，但 Node 上有已绑定 workflow Pod | RECOVERING 先重建账本；未知资源不放行 | 仅凭空内存 ledger 当作全量可用 NPU |
+| 应急调度期间有带 reservation taint 的 Node | 不将 taint 当成空闲资源；确认成员实际可调度或保持等待 | 因错误 Estimator 结果把队首/后继引向被保护 Node |
+| Dispatcher 恢复时应急调度器仍在写入 | 保持 DEGRADED/FAIL_CLOSED，确认降级写者退出后再恢复 | 双写、旧 Binding 重新传播或复制运行 Job |
+
+**上游机制证据**：[Karmada `ResourceBinding` v1alpha2 API](https://karmada.io/docs/reference/karmada-api/work-resources/resource-binding-v1alpha2/) 和 [`PropagationPolicy` API](https://karmada.io/docs/reference/karmada-api/policy-resources/propagation-policy-v1alpha1/) 包含 schedulerName 等能力，**不表示官方内建 Dispatcher 的队列/fencing**；组织 [arc-fedsched 设计](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 的 Hold/Release 与 break-glass 论证可复用。具体升级版本、Karmada failover/descheduler 共写风险、保护 taint 兼容性均须锁定 API 和控制器机制；本文只描述目标架构。
 
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
 
@@ -927,8 +1002,11 @@ F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复�
 | QA-07 公平与吞吐 | 白天 PR、夜间 nightly 形成不同优先级；16 卡队首等待时，2 卡任务可运行在其他节点 | Dispatcher 在可信类别与配置窗口内重排未放行 Binding；队首享有保护，其他组用非预留容量 Backfill | 未经授权的高优先级标签无效；保护不被后继消耗；跨租户权重与抗饥饿指标未批准前不宣称已达标；PL-D03、F03-06/08 |
 | QA-08 资源泄漏与故障恢复 | Dispatcher Leader 故障，成员存在仍有效的 reserved Node taint | 新 Leader 对账恢复账本，成员 Janitor 对到期保护按归属清理，恢复互斥放行 | 不得因 Dispatcher 故障永久占有节点；降级需显式宣告公平策略减弱；PL-D03、F03-07/09 |
 | QA-09 资源预留准确性 | 队首获得候选 Node 预留，但真实 workflow Pod 最终绑定另一个 Node | 由成员 Scheduler 选真实 Node，Dispatcher 观察 PodScheduled 后核对、迁移或释放保护记录 | 不能把 reserved Node 误记作 NPU 已占用或队首已兑现；PL-D02/D03、F03-08 |
+| QA-10 公平性正确性 | 相同权重甲租户运行 16 卡×1 h，乙运行 2 卡×1 h | PL-D04 按同资源族 NPU 卡时计算服务量，分别扣除未落地 grant，公平选择下一候选 | Job 数相同不等于公平；异构 NPU 家族不可直接合并；F03-10 |
+| QA-11 预调度类别可信性 | 同 runs-on 运行 PR 与 nightly，但 Binding 放行前缺失可信 Job 映射 | PL-D05 输出 ClassUnknown 并使用普通优先；可信一一关联后才使用 PR/nightly 时间优先级 | 不以 JobStarted 后字段或提交者可改 Label 伪造高优先级；F03-11 |
+| QA-12 故障降级互斥性 | Dispatcher 仍续约 Leader Lease，但决策循环已停止；应急实例准备接管 | PL-D06 检测真实调度进度；确认旧 Writer 停止后才可 DEGRADED，否则 FAIL_CLOSED | 不允许双写、旧资源预留被忽略或 Job 重复分发；F03-12/13 |
 
-**可评审性门槛**：每项场景必须指出输入事实、决策归属、响应、禁止动作、可追踪对象和残余风险。PL-D03 已明确目标 FIFO/Reserve/Backfill 与失效安全规则，**但当前 Manifest 不包含 Dispatcher**；类别来源、租户公平参数、节点预留对成员调度器的真实约束及故障接管仍需目标版本接口确认。旧 Ready、容量估计偏差和运行时效果均不是设计文字可以证明已解决的事实。
+**可评审性门槛**：PL-D03～06 已给出 FIFO/Reserve/Backfill、跨租户公平、可信类别和降级的目标契约，但**当前 Manifest 不包含 Dispatcher**。Job/Binding 预调度映射、旧 Writer 失效证明、成员保护约束及批准的权重/窗口仍须接口确认。设计完成不表示运行时公平、容量正确或状态恢复已经验证。
 
 # 5 功能实现设计
 
@@ -1347,8 +1425,12 @@ sequenceDiagram
 | PL-11 | Backfill 仅使用不影响队首预留承诺的非预留资源 | 没有可信完成时限时不得借用队首保护 Node 的空闲量 |
 | PL-12 | Dispatcher 重启或切主后必须重建队列及账本；Binding 写者互斥，租约具备失效清理 | 两个 Leader 不得同时放行；Dispatcher 退出不能使 Node 永久被 taint |
 | PL-13 | 分时优先级仅重排未放行任务，需有可信 PR/nightly 分类与抗饥饿策略 | 未知任务类别不冒充 PR；旧任务不因每天切换窗口无限期等待 |
+| PL-14 | 跨租户按同一资源族的 NPU 卡时和批准权重仲裁；未落地授予与已完成服务分开计量 | 16 卡×1 小时与 2 卡×1 小时不能视为相同服务；PL-D04 |
+| PL-15 | 类别在 Binding 放行前可信关联；不从可修改的标签推导 PR/nightly | 同 runs-on 无法映射 queued Job 时按 ClassUnknown 普通优先；PL-D05 |
+| PL-16 | 应急调度接管前必须确认原 Binding Writer 失效 | 决策停止但进程仍续约不能判定 Dispatcher 健康；PL-D06 |
+| PL-17 | 切主先对账持久化 grant、Node 预留及实际 NPU Pod；未知容量停止放行 | 空账本不是节点空闲；应急和 Dispatcher 不能双写；PL-D06 |
 
-**设计级验收边界**：PL-07～13 是目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义成员和节点权威，PL-D03 具体设计 FIFO、Reserve Node、Backfill 与恢复，PL-D01 约束已放行 Runner。跨租户权重、分时窗口、延迟及故障阈值为 P 类；不宣称上游已有公平保证、原子预留或 Job 无损迁移。
+**设计级验收边界**：PL-07～17 为目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义两级放置；PL-D03 定义 FIFO/Reserve/Backfill；PL-D04 定义公平计量；PL-D05 定义可信分类；PL-D06 定义故障降级。权重、类别关联、时间窗口及故障阈值均为 P 类，不宣称运行时已经具备公平或无损切换。
 
 ### 5.3.9 DFX分析
 
@@ -1367,6 +1449,10 @@ sequenceDiagram
 | F03-07 | 预留租约未续或未清理；Dispatcher/Janitor 故障。 | Node 长期被 taint，资源闲置。 | `reserved-until`、reserved-by、Janitor 运行与实际 Node taint。 | 新 Leader 对账，Janitor 按归属/到期回收；限制每集群受保护节点预算。 | Actuator/Janitor 维护者 |
 | F03-08 | 回填任务持有过宽 Toleration 或同组未被 Hold。 | 后继任务占用队首保护容量，FIFO 承诺失效。 | 对照 Runner group、Node taint、workflow Pod 的实际 NodeName。 | 仅精确 Equal 容忍，同组后继 Hold；错误保护须告警并恢复。 | Dispatcher/成员调度维护者 |
 | F03-09 | 两个 Dispatcher 实例或降级调度器同时放行 Binding。 | 重复分发或队列顺序不可信。 | Leader Lease、Binding resourceVersion、放行决策记录。 | 只保留单写者；完成状态恢复后才放行，接管与降级互斥。 | Dispatcher/联邦控制面维护者 |
+| F03-10 | 跨租户按 Job 数而非 NPU 卡时排序，或窗口计量遗漏已运行任务。 | 高耗资源租户长期占优，公平目标失效。 | 比对租户 NPU Pod 卡时、权重、grant 和仲裁决策。 | 按 PL-D04 在同资源族使用实际分配卡时加权仲裁；数据未知则不宣称公平保证。 | Dispatcher 公平策略维护者 |
+| F03-11 | 使用可修改 Label 或未关联的 Job 元数据提升 PR 优先级。 | 高优先级被冒用，nightly 长时间饥饿。 | 检查 job-key 到 Binding 的来源、唯一性、签发时刻与 ClassUnknown 率。 | PL-D05：可信分类前置关联；缺失则普通类别并告警，不作优先承诺。 | 可信需求接入/调度策略维护者 |
+| F03-12 | Dispatcher 租约续约但决策停滞，Watchdog 只看 Lease。 | 全部新增任务长期 Hold。 | 最后成功决策循环、采集新鲜度、放行进度与 Lease 差异。 | PL-D06：独立进度健康检查，进入 RECOVERING/安全降级或 FAIL_CLOSED。 | Dispatcher/Watchdog 维护者 |
+| F03-13 | 网络分区造成旧 Dispatcher 与应急 Scheduler 双写。 | Binding 目标冲突或重复传播，资源账本错误。 | 写者身份、进度与 Binding 版本/目标事件。 | PL-D06：证明旧 Writer 失效后才接管；无法排他就 FAIL_CLOSED。 | 联邦控制面维护者 |
 
 **风险—措施—验证追踪**（关联：SR-03-01、SR-03-02、SR-NF-02/03；延续上方 FMEA 编号，不替代已有故障表）
 
@@ -1381,6 +1467,10 @@ sequenceDiagram
 | F03-07 | Node 预留泄漏或租约清理失效 | 可用 NPU 节点永久闲置 | 高 | PL-10/12；归属标记、短租约续期、成员 Janitor、预算限制 | Leader 死亡后短租约到期可判定清理；错误归属不得被自动接管 | 成员控制面/Janitor 同时故障时仍可能残留 |
 | F03-08 | 同组后继绕过 Hold、宽泛 toleration 抢占队首 | 预留失效、队首饥饿 | 高 | PL-10/11；仅匹配 group 的 Equal Toleration、同组 Hold、预留违规观察 | 容忍 Exists/未 Hold 均不满足验收；出现非队首占用必须告警 | 与未纳管调度器之间存在共存约束 |
 | F03-09 | 多写者或恢复未对账就放行 | 任务重复传播、账本偏差 | 严重 | PL-12；唯一 Binding 写者、Leader/进度检测、Grant 重建、降级互斥 | 切主前后同 Binding 不能由两个写者放行；未知容量不进入新放行 | Lease 抖动及网络分区导致短时不可用 |
+| F03-10 | 按任务数量轮转而忽略 NPU 卡时与租户权重 | 小任务与大任务被错误等价，公平性失真 | 高 | PL-14、PL-D04：按真实 NPU 工作负载的卡时计量，grant 单独占容量预算 | 16 卡×1h 与 2 卡×1h 获得不同的服务量；跨设备家族分别计算 | 不可放置的大任务与非抢占长任务仍影响短期公平 |
+| F03-11 | 从非可信标签/启动后元数据推测 PR/nightly 类别 | 任务虚假升权，低优先级长期饥饿 | 高 | PL-15、PL-D05：只接受放行前唯一可信 Job→Binding 关联 | 相同 runs-on 不可映射时按 ClassUnknown 普通类别；绝不按猜测升权 | 目标 ARC 版本未证明具备预调度一一映射 |
+| F03-12 | Watchdog 只依据后台 Lease 判活 | Dispatcher 持续 Hold，排队 SLO 失效 | 高 | PL-16、PL-D06：决策进度与主动容量健康检查 | 决策循环停止但续约正常时，进入 RECOVERING/降级状态或 FAIL_CLOSED | 业务恢复阈值仍待批准 |
+| F03-13 | 降级接管时旧 Writer 仍能写 Binding | 多 Cluster 传播及对象身份争用 | 严重 | PL-16/17、PL-D06：接管前确认旧 Writer 已失效，重建 grant，更新版本冲突重查 | 旧 Writer 无法被排他时不进入 DEGRADED；不得并行更新同一 Binding | 网络分区下可用性降低，安全优先 |
 
 **运行诊断与敏感信息处理**：诊断时先查看成员集群的 Ready 状态与 Karmada Binding/Work，再检查成员 Pod 事件和 Secret 引用。日志不得保存 Secret 数据。
 
@@ -1776,7 +1866,7 @@ sequenceDiagram
 | IR-01 / FT-01 | SR-01-01 | UC-01、UC-02 | F-01；5.1.6 | SP-01、SP-05；SEC-02 | 5.1.9：F01-01～02 |
 | IR-01 / FT-01 | SR-02-01 | UC-03 | F-02；5.2.6 | SP-01、SP-07；LC-03/04 | 5.2.9：F02-01～02 |
 | IR-04 / FT-04 | SR-02-02 | UC-04、UC-12（清理异常） | F-02、F-05；5.2.6、5.5.6 | SP-07、SP-06；LC-05/06 | 5.2.9：F02-02～03；5.5.9 |
-| IR-02 / FT-02 | SR-03-01 | UC-05、UC-10 | F-03；5.3.6 | SP-02、SP-03；PL-01～13、PL-D01/D02/D03 | 5.3.9：F03-01～09；QA-07～09 |
+| IR-02 / FT-02 | SR-03-01 | UC-05、UC-10 | F-03；5.3.6 | SP-02、SP-03；PL-01～17、PL-D01～D06 | 5.3.9：F03-01～13；QA-07～12 |
 | IR-03 / FT-03 | SR-03-02 | UC-06 | F-03；5.3.6 | SP-03、SP-04；LC-04 | 5.3.9：F03-02 |
 | IR-03 / FT-03 | SR-04-01 | UC-08、UC-11 | F-04；5.4.6 | SP-04、SP-05；SEC-01～06 | 5.4.9：F04-01～04 |
 | IR-03 / FT-03 | SR-05-01 | UC-09、UC-12（状态异常） | F-05；5.5.6 | SP-06、SP-07；LC-01/02/06 | 5.5.9：F05-01～03 |
@@ -1796,7 +1886,7 @@ sequenceDiagram
 | SR-NF-02 凭证保护 | SP-04、SP-09 | 5.2.9、5.3.9、5.4.9 |
 | SR-NF-03 成员故障隔离 | SP-02、SP-07 | 5.2.9、5.3.4.3、5.3.9 |
 | SR-NF-04 可服务性 | SP-09 | 5.1～5.6 各功能的 DFX |
-| SR-NF-05 性能与容量 | SP-01/02、SP-09、PL-D03 | 4.3.6、4.7.1/4.7.4、5.3.4/5.3.9；量化参数 P-SR-01、P-SR-02 |
+| SR-NF-05 性能与容量 | SP-01/02、SP-09、PL-D03～D06 | 4.3.6～4.3.9、4.7.1/4.7.4、5.3.4/5.3.9；量化参数 P-SR-01、P-SR-02 |
 | SR-NF-06 成本与资源利用 | SP-01、SP-07 | 5.2.3、5.2.9；量化参数 P-SR-04 |
 | SR-NF-08 策略可维护性 | SP-01、SP-02 | 4.2、4.3、5.3.6 |
 
@@ -1812,13 +1902,16 @@ sequenceDiagram
 | ARC Controller/Listener RBAC 最小化 | 必须根据目标版本的真实 API verbs/resources 收敛 | 当前 Controller admin kubeconfig 不符合生产目标；文档不能替代权限实施 |
 | JIT Secret 异步传播与删除 | 依赖 Pod 引用及 Karmada `propagateDeps`，清理需确认成员副本 | 不能推断所有引用形态均自动识别，或跨成员销毁是原子事务 |
 | NPU 资源容量与节点可放置性 | PL-D02：Dispatcher 选择成员并协调容量预留，成员 kube-scheduler/Volcano 选择 NPU Node，kubelet/Device Plugin 分配设备 | Dispatcher Binding 独占权、hooks 同节点行为、成员容量估计及预留恢复需版本级确认；当前 Manifest 未实现 |
-| FIFO/Reserve Node/Backfill 与公平 | PL-D03：Dispatcher 持有与放行 Binding、队首容量保护、非预留容量 Backfill、优先级与租户公平仲裁 | 可信 PR/nightly 类别、租户来源、批准时间窗口/权重、Node 精确 Toleration、同组 Hold、租约清理和应急调度互斥尚需接口与参数确认 |
+| FIFO/Reserve Node/Backfill | PL-D03：Dispatcher Hold/Release、节点容量保护、独立容量 Backfill | 成员 Toleration/同组 Hold 及租约清理尚需版本接口确认 |
+| 跨租户公平 | PL-D04：以同 NPU 资源族实际分配卡时/批准权重作为仲裁依据 | 租户身份、权重、计量窗口、老化规则未批准；不得跨异构卡数直接加总 |
+| PR/nightly 分类 | PL-D05：可信预调度 Job→Runner→Binding 关联才可分时优先；否则 ClassUnknown | 同 runs-on 下 queued Job 与 Runner 的映射能力尚不确定，未确认前不声称分时优先 |
+| Dispatcher 故障降级 | PL-D06：ACTIVE/RECOVERING/DEGRADED/FAIL_CLOSED/RESTORING 及单 Writer 互斥 | 进度健康、旧 Writer 失效证明、Karmada 应急调度和容量预留兼容需锁定版本；失败则停止新增放行 |
 | 关键路径与可用性目标 | 已定义阶段、来源、故障域和诊断契约 | 没有业务批准的时延/恢复阈值，不构成量化性能与可用性验收 |
 
-**DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；PL-D02 → F-03/QA-01、QA-04、PL-07/08、F03-03～05；PL-D03 → F-03/QA-07～09、PL-09～13、F03-06～09；ST-D01 → F-05/QA-03；QA-05～06 → SP-07/SP-09。剩余风险见 4.7.4。
+**DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；PL-D02 → F-03/QA-01/04、PL-07/08、F03-03～05；PL-D03 → F-03/QA-07～09、PL-09～13、F03-06～09；PL-D04 → PL-14、QA-10、F03-10；PL-D05 → PL-15、QA-11、F03-11；PL-D06 → PL-16/17、QA-12、F03-12/13；ST-D01 → F-05/QA-03；QA-05/06 → SP-07/09。剩余风险见 4.7.4。
 
 **最终评审口径**：第 2～5 章设计结构、要求追踪、异常处理与 FMEA 可以通过静态设计检查；涉及上表未确定的技术可实现性、正式指标或实际运行效果，只能标为**待专项选型/接口确认**。不要求开展 PoC，也不以抽象时序图替代上游 API 证据。
 
 **统一资料来源及版本边界**：本文件 3.7 给出 ARC/GitHub Actions、Karmada、Kubernetes 官方文档索引；本仓库现有 Manifest 用于定位配置差异；任何仅有内部运行记录支持、而无上游接口规范支持的声明都应标明为集成设计假设。缺少 PoC 不构成功能设计缺口，但 **SR/接口/异常/DFX 未定义**属于设计缺口。
 
-**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 型号与扩展资源名、跨租户权重、PR/nightly 可信类别及时间窗口、Reserve/Backfill 租约与保护预算、性能/可用性 SLO。若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
+**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 资源族与扩展资源名、公平窗口/租户权重与配额、PR/nightly 可信 job-key 映射及分时窗口、Reserve/Backfill 租约预算、故障恢复进度阈值/排他机制、性能/可用性 SLO。若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
