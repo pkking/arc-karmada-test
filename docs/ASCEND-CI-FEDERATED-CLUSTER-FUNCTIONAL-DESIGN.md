@@ -509,6 +509,76 @@ Karmada `PropagationPolicy` 选择资源与执行成员（U）；每个 Runner P
 
 **故障迁移边界**：Karmada 的 `PropagationPolicy.spec.failover` 是可选机制；官方文档对其迁移保证主要以可管理副本工作负载说明。即使目标版本支持某种 Pod 迁移，也不能推出 GitHub Job 与 ARC Runner 的安全切换。当前不启用对已创建 Runner 的自动跨成员 failover。验收只检查策略、对象身份与异常决策链，不进行 PoC。[Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)；[Failover Analysis](https://karmada.io/docs/next/userguide/failover/failover-analysis/)。
 
+
+### 4.3.5 节点容量感知的首次放置设计（PL-D02）
+
+**目标架构决策（D）**：对尚未放置的独立 Runner Pod，Karmada 在选择成员前按 Pod 完整资源请求判断单节点可放置性，排除无可行节点的成员；对可行成员评分，选择一个目标。保留 ARC 的 Runner 生命周期、Karmada Binding/Work 分发和成员 kube-scheduler 节点调度，不实现 GitHub Job 队列。PL-D01 继续约束**已经绑定的 Runner**，PL-D02 只降低**首次误放置**风险。
+
+| 备选方案 | 效果与限制 | 决策 |
+|---|---|---|
+| A：仅依赖 `clusterAffinity` 和 `Divided/Weighted` | 能限制候选成员，不能证明单节点有完整 NPU 容量，也不能分配独立 Pod 的比例 | 当前 Manifest 基线，不满足目标 |
+| B：依据 Cluster 聚合剩余 NPU 数量过滤 | 不能识别跨 Node 碎片、设备型号及节点约束冲突 | 不采用 |
+| C：Karmada 定向 Scheduler（Filter/Score）+ 节点容量估计 + 未落地容量暂计 | 在原生 Binding 决策点提前排除不可放置成员，减少因放错成员造成的等待 | **目标选型** |
+
+**责任与接口（目标，不代表当前配置已有）**：
+
+| 构件 | 输入/现有扩展点 | 输出及边界 |
+|---|---|---|
+| ARC Runner Pod | `Pod.spec.containers[].resources.requests`、节点亲和、污点容忍、架构及服务身份 | 提供完整需求；`maxRunners` 不是 NPU 容量 |
+| `PropagationPolicy` | 精确 `resourceSelectors`、`placement.clusterAffinity`；目标版本支持时以 `spec.schedulerName` 指定 Scheduler | 仅 ARC Runner Pod 定向该 Scheduler；不改变其他工作负载 |
+| Karmada 定向 Scheduler | 官方 Scheduler Framework 的 `FilterPlugin`、`ScorePlugin` 和原生 Binding | 先过滤授权/健康/可放置成员，再评分；只选择一个成员，不改 Work 控制器 |
+| 成员容量估计器 | Node/Pod 资源快照、设备扩展资源、Pod 约束，按目标版本选择原生 Estimator 或适配实现 | 返回 `Feasible / Infeasible / Unknown`、证据时间及可行节点；默认 Estimator 对独立 Pod/NPU 扩展的覆盖需确认 |
+| 未落地占用跟踪 | Binding/Pod UID、目标成员、资源请求、成员实际 `PodScheduled`/删除事实 | 计入尚未出现在成员已调度用量里的占用；不声称跨集群原子预留 |
+| 成员 kube-scheduler | 当前 Node/Pod 状态 | 最终节点绑定；失败时 Pending/FailedScheduling，事实优先于容量估计 |
+
+**节点级可放置性**：对于每个候选成员，至少存在**一个节点**同时满足 CPU、内存、设备插件发布的 NPU 扩展资源名/请求数量、架构、NodeSelector、NodeAffinity、Taints/Tolerations 和 Node Ready 约束；按 Node 逐项扣除已调度请求和未落地占用。对厂商设备拓扑、亲和插件或其他条件无法可靠模拟时，返回 `Unknown`，不得以 Cluster 空闲卡数替代。多节点 Gang 不等于单 Pod 调度，本节不赋予单 Pod 跨节点拼接资源的能力。
+
+**并发和一致性契约（D）**：
+
+1. 以控制面 Pod UID、Binding UID 与目标 Cluster 标识未落地分配；同一版本更新幂等。成员选择后的暂计必须在下一次容量过滤前生效；Binding 更新冲突时重读并重新评估。
+2. 仅在成员实际 Pod 已绑定 Node，且估计器快照已计入该 Pod 的资源请求时，才从暂计中核销，防止双重扣减或完全漏计。Pod/Binding 删除或目标改变也必须先核对对象身份与成员状态。
+3. 调度器重启、成员失联、状态不一致或容量快照过旧时，将相应容量判为 `Unknown`；应先从现存 Binding/Work、成员 Pod 重建并对账，不能以 TTL 到期单独证明物理资源释放。
+4. Karmada v1.18 官方 `SchedulingOvercommitProtection` 为 Alpha，适用于 `Divided` 且容量感知分副本策略；**当前独立 Pod 不可直接声称由此获得超卖保护**。本设计借鉴 assume-and-deduct 模型，仍需在选定 Karmada 版本确认独立 Pod 的扩展接口与 HA 恢复方案。
+5. 其他调度器、瞬时设备状态和控制面异步传播仍可能让首次估计失效。目标是减少误放置，**不是保证原子容量预留、零 Pending 或跨成员抢占**。
+
+**调度与等待时序**：
+
+```mermaid
+sequenceDiagram
+    participant ARC as ARC Controller
+    participant KS as Karmada 定向 Scheduler
+    participant EST as 节点容量估计器
+    participant B as Karmada Binding/Work
+    participant M as 成员 kube-scheduler
+    ARC->>KS: Runner Pod 进入待放置路径
+    KS->>KS: 过滤服务授权及成员健康
+    KS->>EST: 对每个候选成员评估完整 Pod 资源请求
+    EST-->>KS: 可行成员、Unknown、快照及原因
+    alt 至少一个可行成员
+        KS->>KS: 扣除未落地占用后过滤/评分
+        KS->>B: 写入唯一成员并记录容量暂计
+        B->>M: Work 分发，成员执行最终节点绑定
+        M-->>KS: 调度事实供容量对账与诊断
+    else 全部不满足或容量事实未知
+        KS-->>ARC: 通过原生 Binding/Pod 可观测状态呈现等待原因
+        Note over ARC,KS: 设计分类 NoFeasibleNode/CapacityUnknown，非上游原生枚举
+    end
+```
+
+**无容量时的等待边界**：无可行成员时不生成指向错误成员的 Work；保留未放置状态、时间及 `NoFeasibleNode` 原因。估计器不可用或拓扑不明时标记 `CapacityUnknown`，不将 Unknown 当成 Feasible。目标重试触发为成员资源释放、成员恢复、策略变化及有界重查；具体重入队事件必须核对所选 Karmada 版本，检查频率与最大等待时长为 P 类。ARC 的 Runner 超时和回收按官方机制执行，不能通过创建另一份 Runner 或重派 GitHub Job 规避等待。
+
+**反例与静态设计验收**：
+
+| 输入 | 目标判断 | 禁止 |
+|---|---|---|
+| Pod 需要 16 卡；A 聚合空闲 20 卡但节点均不超过 8 卡；B 单节点有 16 卡 | A=Infeasible、B=Feasible，**首次放置 B** | 因 A 聚合数大而将 Pod 放至 A |
+| Pod 需要 12 卡；A 可用 8 卡、B 可用 10 卡 | 两者均 Infeasible，等待 | 把 8+10 拼成一个节点的 18 卡 |
+| 两个 8 卡 Runner 同时争夺唯一的 8 卡余量 | 后续评估扣减前一未落地占用或重新判定冲突 | 同一资源被两个 Binding 宣称有硬保证 |
+| A 快照旧且 B 容量可信 | A=Unknown；仅可信 B 可被选择 | 把过期快照当成真实容量 |
+| Pod 已绑定 A 且节点持续 Pending；B 后续释放容量 | 按 PL-D01 保留单目标并诊断；新的 Runner 再按 PL-D02 放置 | 复制已绑定 Runner 或重派 GitHub Job |
+
+**官方机制与版本约束**：[Karmada 自定义 Scheduler 与 `spec.schedulerName`](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)、[Karmada Scheduler Estimator](https://karmada.io/docs/next/userguide/scheduling/scheduler-estimator/)、[Karmada v1.18 Scheduling Overcommit Protection](https://karmada.io/docs/v1.18/userguide/scheduling/scheduling-overcommit-protection/)、[Kubernetes Scheduling Framework](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/)。`next` 仅是参考接口；锁定版本前不声明已支持 Pod/NPU 可行性。本次只修改架构设计，不修改 Manifest 或要求 PoC。
+
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
 
 ### 4.4.1 实现思路
