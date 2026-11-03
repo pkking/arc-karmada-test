@@ -126,7 +126,9 @@ class ContractStaticTests(unittest.TestCase):
             self.assertIn(f"US-{i:02d}", design)
         self.assertIn("SR-06-01", design)
         self.assertIn("K8S-3", design)
-        self.assertIn("文档完成不要求 PoC", design)
+        # The design describes system behavior, not author-facing PoC policy.
+        self.assertIn("vLLM-Omni", design)
+        self.assertNotIn("文档完成不要求 PoC", design)
         self.assertIn("ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md", read("AGENTS.md"))
 
 
