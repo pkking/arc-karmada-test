@@ -89,7 +89,8 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
     def test_six_column_implementation_interface_tables(self):
         for n in range(1, 7):
             head = f"#### 5.{n}.6.1 接口设计"
-            block = self.design.split(head, 1)[1].split("**开发交付边界**", 1)[0]
+            # Stop at the next numbered section: DFX tables use another schema.
+            block = re.split(r"(?m)^### ", self.design.split(head, 1)[1], maxsplit=1)[0]
             rows = [l for l in block.splitlines() if l.startswith("| ")]
             self.assertGreaterEqual(len(rows), 2)
             for row in rows:
@@ -102,10 +103,13 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertFalse(relative.startswith("http"))
             self.assertTrue((DOC.parent / relative).is_file(), relative)
 
-    def test_design_not_po_c_gated(self):
-        self.assertIn("文档完成不要求 PoC", self.design)
-        self.assertIn("官方文档", self.design)
-        self.assertIn("当前仓库 Manifest 是参考配置", self.design)
+    def test_design_explains_scenario_without_process_commentary(self):
+        # Protect the reader-facing design, not an author's review workflow.
+        self.assertIn("vLLM-Omni", self.design)
+        self.assertIn("Dispatcher", self.design)
+        self.assertIn("Karmada", self.design)
+        self.assertIn("ResourceInterpreterCustomization", self.design)
+        self.assertNotIn("文档完成不要求 PoC", self.design)
 
     def test_governance_and_readme_are_unified(self):
         target = "docs/ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md"
