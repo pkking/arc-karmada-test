@@ -398,7 +398,7 @@ erDiagram
 
 # 4 功能域规格变更与设计
 
-> 本章定义跨功能规则；实现见第 5 章。**U** 上游能力；**D** 本方案约束；**P** 部署参数。区分 Manifest 现状与目标，差异需处理。
+跨功能规格统一定义策略、身份、状态、容量及故障约束，具体实现接口见第 5 章。
 
 ## 4.1 功能域规格变更
 
@@ -507,7 +507,7 @@ erDiagram
 
 **容量语义**：合格成员数、成员可用卡数、**单节点可放置的完整资源请求**、Runner 并发上限分别记录；跨成员空闲卡数之和不构成放置成功保证。该设计**不满足**“有任意合格空闲节点时旧 Pod 必然自动重选成功”的强 SLO；若业务批准此要求，必须新增独立的准入/重选规格，不可用 `Divided/Weighted` 替代。
 
-**故障迁移边界**：Karmada 的 `PropagationPolicy.spec.failover` 是可选机制；官方文档对其迁移保证主要以可管理副本工作负载说明。即使目标版本支持某种 Pod 迁移，也不能推出 GitHub Job 与 ARC Runner 的安全切换。当前不启用对已创建 Runner 的自动跨成员 failover。验收只检查策略、对象身份与异常决策链，不进行 PoC。[Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)；[Failover Analysis](https://karmada.io/docs/next/userguide/failover/failover-analysis/)。
+**故障迁移边界**：Karmada 的 `PropagationPolicy.spec.failover` 是可选机制；官方文档对其迁移保证主要以可管理副本工作负载说明。即使目标版本支持某种 Pod 迁移，也不能推出 GitHub Job 与 ARC Runner 的安全切换。对已创建 Runner 不启用自动跨成员 failover；异常处理根据策略、对象身份及真实 Job 状态决定。[Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)；[Failover Analysis](https://karmada.io/docs/next/userguide/failover/failover-analysis/)。
 
 
 
@@ -664,7 +664,7 @@ sequenceDiagram
 
 **DFX 设计证据和待选参数（P）**：Dispatcher 按成员/资源族/租户统计联邦等待与资源承诺；成员 Volcano 按 NPU Pod PriorityClass 统计待调度队列、调度耗时和抢占/回收事件，分别记录队首等待、Hold、已分配卡时、Backfill、预留兑现及 Leader 切换。区分 `GitHub queued → started` 与 `Binding hold → release`，后者是 Dispatcher 自身等待，不可写成 GitHub 原生排队时间。PriorityClass 相对顺序、Volcano 调度动作、租户权重/公平阈值、预留时长、故障切换时限和等待目标均需正式批准；没有证据不填写性能承诺。
 
-**参考方案：**组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；本节将其作为设计参考，**不将其代码或部署状态自动视为本仓库已实现**。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
+**参考方案：** 组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；其中的 Hold/Release、容量保护及 janitor 机制可作为接口参考；现有仓库尚未部署这些功能。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
 
 
 ### 4.3.7 跨租户加权公平仲裁（PL-D04）
@@ -1735,7 +1735,7 @@ sequenceDiagram
 
 ### 5.6.1 功能概述
 
-**扩展设计，当前无正式核心 SR**：原候选 SR-06-01 未纳入第 2.4 节；关联 UC-07 NPU 工作流节点调度、UC-13 NPU 资源不足，以及 SP-02、SP-08。当前 Manifest 未配置 NPU 扩展资源或 Dispatcher；本节仅规定联邦与成员的**调度职责**，不设计运行时隔离、设备固件或沙箱。
+**关联场景：** UC-07 NPU 工作流节点调度、UC-13 NPU 资源不足；关联规格 SP-02、SP-08。NPU 资源适配属于扩展候选（原 SR-06-01）。现有 Manifest 尚未配置 NPU 扩展资源或 Dispatcher；NPU 运行隔离和设备固件另有独立约束。
 
 F-06 将 NPU 资源需求对应到**成员集群内实际申请 NPU 的 Pod**，保证联邦层选成员、成员层选 Node、kubelet 与设备插件分配设备。
 
