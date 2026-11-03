@@ -4,15 +4,23 @@
 
 ## 1.1 目标与职责
 
-将项目独占集群纳入 Karmada，统一管理 Runner 供给、分发和回收。
+**业务场景。** 以 vLLM 社区的昇腾 CI 为例，在 PR 高峰期，每天可能有超过 50 个 PR 需要验证，单个 PR 平均需要约 36 张 NPU 卡。多个 PR 并发提交时，计算资源需求会迅速超过 vLLM 专属集群的可用容量，造成任务排队，延长 PR 从提交到获得 CI 结果的时间。与此同时，分配给 vLLM-Omni 的集群可能仍有符合要求的空闲资源。
+
+**当前问题。** CI 资源按项目分别配置和使用，各集群相互独立。即使 vLLM-Omni 集群有空闲 NPU，vLLM 的 CI 任务也无法直接使用：任务只能等待本集群释放资源，而其他集群的计算能力未被充分利用。对开发者而言，集群划分属于 CI 平台的内部资源组织方式，不应要求他们为了寻找空闲资源而修改工作流、切换 Runner 标签或选择执行集群。
+
+**设计目标。** 在满足资源规格、访问授权和运行环境要求的前提下，将多个项目集群接入统一的联邦资源池。开发者仍使用原有 GitHub Actions 工作流和统一的 `runs-on` 标签提交任务；平台根据候选成员及可用资源条件选择执行集群，在成员集群内完成 Pod 的节点调度与执行，并回传 Runner 状态。这样，vLLM 专属集群资源不足时，其 CI Runner 可以使用 vLLM-Omni 集群的合格空闲容量，减少因集群边界造成的等待，同时提高整体资源使用效率。
+
+本方案采用 **ARC 管理 Runner 供给与生命周期、Karmada 管理跨集群资源传播及成员选择、成员 Kubernetes 负责节点调度**。具体职责如下。
 
 | 职责 | 实现主体 | 边界 |
 |---|---|---|
-| 任务匹配与 Runner 生命周期 | ARC Listener、Controller、Scale Set | GitHub Actions 提供队列；ARC 调整 Runner 数量 |
-| 资源对象传播与成员选择 | Karmada Policy、Scheduler、Binding / Execution Controller | 选择成员集群；不承担每个 Pod 的节点级调度 |
-| 资源实际执行 | 成员 Kubernetes、kube-scheduler、kubelet | 创建 Runner Pod；可在 NPU 节点执行有设备请求的工作负载 |
-| 状态与凭证适配 | ResourceInterpreterCustomization、Listener Token / RBAC、propagateDeps | 保留 ARC 所需的 Pod 状态和 JIT Secret |
-| 联邦集成适配 | 传播策略、身份权限和状态解释 | 约束 ARC、Karmada 与成员集群间的接口行为 |
+| 任务匹配与 Runner 生命周期 | GitHub Actions、ARC Listener、Controller、Scale Set | GitHub 管理 Job 队列与匹配；ARC 调整 Runner 数量并管理生命周期 |
+| 资源对象传播与成员选择 | Karmada Policy、Scheduler、Binding / Execution Controller | 根据策略选择成员集群并传播资源；不负责 Pod 的节点级调度 |
+| 资源实际执行 | 成员 Kubernetes、kube-scheduler、kubelet | 在目标成员内选择符合资源与拓扑约束的节点并启动 Runner Pod |
+| 状态与凭证适配 | ResourceInterpreterCustomization、Listener Token / RBAC、propagateDeps | 反馈成员 Pod 状态，传递 Runner 所需的临时凭证并限制访问权限 |
+| 联邦集成适配 | 传播策略、身份权限和状态解释 | 约束 ARC、Karmada 与成员集群之间的接口行为 |
+
+**适用条件：** 跨项目共享仅使用获得授权且满足设备、网络、运行时及节点级调度约束的资源。Karmada 的成员选择不构成容量预留或节点可调度性的保证；具体调度限制见第 4.3 节。
 
 ## 1.2 边界
 
