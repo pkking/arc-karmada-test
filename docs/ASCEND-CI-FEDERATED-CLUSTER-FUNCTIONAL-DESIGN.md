@@ -12,7 +12,7 @@
 | 资源对象传播与成员选择 | Karmada Policy、Scheduler、Binding / Execution Controller | 选择成员集群；不承担每个 Pod 的节点级调度 |
 | 资源实际执行 | 成员 Kubernetes、kube-scheduler、kubelet | 创建 Runner Pod；可在 NPU 节点执行有设备请求的工作负载 |
 | 状态与凭证适配 | ResourceInterpreterCustomization、Listener Token / RBAC、propagateDeps | 保留 ARC 所需的 Pod 状态和 JIT Secret |
-| 设计契约与治理 | 本子系统接口适配、策略、身份与状态约束 | 由本项目负责架构决策；不代替上游内部实现 |
+| 联邦集成适配 | 传播策略、身份权限和状态解释 | 约束 ARC、Karmada 与成员集群间的接口行为 |
 
 ## 1.2 边界
 
@@ -307,7 +307,7 @@ erDiagram
 | Pod.status | 成员 Kubernetes 产生 | 供 ARC 判断 Runner 状态 | 随 Pod | containerStatuses、conditions、Phase |
 | MemberCluster / NPU 资源 | Karmada + 成员 K8s / Device Plugin | 集群资格、节点扩展资源 | 长期运行时 | Ready、labels、allocatable、扩展资源 |
 
-**数据分级与销毁（D）**：GitHub PAT/App 凭证、Listener Token、JIT Secret 属敏感数据，禁止在日志、Git、工单附件输出值；运行时对象删除由 ARC/Karmada 所有权规则驱动，审计只保留非敏感 ID/状态。Job 日志、镜像与第三方系统持久数据的保留/销毁服从各自系统策略，**不因 Pod 删除自动消失**。证书/Token 轮换同时考虑控制面存储、成员副本和日志暴露面。销毁保留期/合规等级若需精确数值，由企业数据分类制度提供（P），不虚构默认周期。
+**数据分级与销毁**：GitHub PAT/App 凭证、Listener Token、JIT Secret 属敏感数据，禁止在日志、Git、工单附件输出值；运行时对象删除由 ARC/Karmada 所有权规则驱动，审计只保留非敏感 ID/状态。Job 日志、镜像与第三方系统持久数据的保留/销毁服从各自系统策略，**不因 Pod 删除自动消失**。证书/Token 轮换同时考虑控制面存储、成员副本和日志暴露面。数据分类、保留期限按企业数据管理制度执行。
 
 ### 3.5.1 对象标识、引用关系及权威事实
 
@@ -345,7 +345,7 @@ erDiagram
 | 删除被 Finalizer 阻塞 | 所属控制器/受权运维确认对象所有权及依赖 | 保留 context、UID、DeletionTimestamp、Finalizer、事件；不删除未知 Finalizer |
 | 审计/日志/外部 Job 历史销毁 | 各数据系统所有者依据数据分级与保留制度处理 | 只记录非敏感标识及事件；外部持久数据不随 Pod 删除自动消失 |
 
-**销毁约束**：① 不以跨集群相同 name/UID 推断相同对象；② 不用审计关联代替 OwnerReference；③ 成员失联后不宣称资源已经清理；④ 未确认 Job 状态前不因 Pod 消失而重新执行；⑤ 不在 Git、日志或工单中保存凭证值。分类等级、期限及已下发副本的强制撤销手段须由企业数据管理制度或凭证机制确定（P），不得编造默认期限。目标 ARC/Karmada 版本的 OwnerReference 与 Finalizer 细节仍须以真实 CRD/控制器行为核实，本文不虚构固定引用字段。
+**销毁约束**：① 不以跨集群相同 name/UID 推断相同对象；② 不用审计关联代替 OwnerReference；③ 成员失联后不宣称资源已经清理；④ 未确认 Job 状态前不因 Pod 消失而重新执行；⑤ 不在 Git、日志或工单中保存凭证值。数据分类、保留期限及已下发副本的撤销方式由企业制度和凭证管理机制确定。OwnerReference 与 Finalizer 的具体关系以目标 ARC/Karmada 版本的 CRD 和控制器行为为准。
 
 **依据**：[GitHub ARC 工作原理](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)、[Kubernetes 所有权与垃圾回收](https://kubernetes.io/docs/concepts/architecture/garbage-collection/)、[Karmada PropagationPolicy](https://karmada.io/docs/userguide/scheduling/propagation-policy/)。上游文档支持各组件的原生职责，不证明所有跨域清理动作具有原子性或自动完成。
 
@@ -387,7 +387,7 @@ erDiagram
 
 # 4 功能域规格变更与设计
 
-本章规定跨功能约束，详细接口和时序见第 5 章。
+跨功能约束及关联接口见第 5 章。
 
 ## 4.1 功能域规格变更
 
@@ -1210,7 +1210,7 @@ sequenceDiagram
 | Secret 副本留存/成员失联 | 传播与回收状态未知 | 记录目标成员及副本 UID；恢复后核对，并独立检查远端凭证撤销 | 不宣称删除控制面 Secret 即完成全域撤销 |
 | 更新 Secret 但 Listener 仍用旧 Token | 凭证加载机制 | 定义可检查的新凭证加载/Listener 重启流程 | 不把 Secret resourceVersion 变化当成轮换成功 |
 
-**接口检查**：应记录 Caller 身份、目标资源及操作、请求结果、失败类别、凭证非敏感版本和观测时间。原则上仅记录不含敏感信息的可追踪标识。对当前 `03-rbac.yaml` 的 `ephemeralrunners` 授权范围及 Controller admin kubeconfig，必须标为生产目标权限整改点；不能通过本次文档更新宣布配置已整改。
+**接口审计：** 记录调用者身份、目标资源及操作、请求结果、失败类别、凭证非敏感版本与观测时间。`03-rbac.yaml` 的 `ephemeralrunners` 授权范围以及 Controller 的管理员 kubeconfig 仍需收敛到最小权限。
 
 ### 5.4.5 用户接口设计
 
