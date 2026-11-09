@@ -1018,6 +1018,70 @@ stateDiagram-v2
 
 **依据**：[Karmada ResourceInterpreterCustomization API](https://github.com/karmada-io/karmada/blob/master/pkg/apis/config/v1alpha1/resourceinterpretercustomization_types.go)；[Karmada AggregatedStatusItem API](https://pkg.go.dev/github.com/karmada-io/karmada/pkg/generated/applyconfigurations/work/v1alpha1)；[Karmada Customizing Resource Interpreter](https://karmada.io/docs/userguide/globalview/customizing-resource-interpreter/)。
 
+
+### 4.5.6 ARC 可见状态的唯一仲裁和主动失效（ST-D02）
+
+**架构决策（D）**：ST-D01 的 `StatusUnknown` 只有平台诊断含义，**不能阻止 ARC 读取控制面缓存的旧 `Pod.status.conditions[Ready]`**。因此定义一个**对 ARC 可见的唯一状态选择与失效责任**：以当前 Runner Pod 身份、Binding/Work 唯一目标成员、该成员真实 Pod UID 和可证明的新鲜度作为状态来源；任何信息缺失或冲突都不得保留“已确认 Ready”这一结论。**同时保留 GitHub Runner 注册/接单为独立状态权威**，不宣称修改 `Pod.status` 能直接撤销已经连接 GitHub 的 Runner。
+
+**上游可复用接口与选型**：
+
+| 方案 | 已有机制与限制 | 本方案选择 |
+|---|---|---|
+| 当前 `ResourceInterpreterCustomization` 的 Lua `AggregateStatus` | 可聚合成员 Pod.status；当前脚本取首个非空。是否能读取当前 Binding/Work 的目标及成员真实 UID 未确认；对成员失联后无新事件的旧 Ready 没有可证明的超时覆盖 | **不能满足目标**，只可用作当前严格单来源参考 |
+| `ResourceInterpreterWebhookConfiguration` 的 `AggregateStatus` | Karmada 官方支持 Webhook 解释器；但同 GVK/同操作下 **Declarative Lua 优先于 Webhook**。Webhook 调用是否包含足够身份/新鲜度输入、是否可查询 Binding 需按目标版本确认 | **优先考虑的目标扩展点**：替换而非并行叠加旧 Lua 同一 `AggregateStatus`，通过受控状态选择服务核对 Binding/Work/成员 Pod |
+| 独立状态观察、定期核对与失效协调 | 可补充成员不可达、超时且未产生新状态事件的主动检测；但需确认谁有权更新 ARC 实际读取的控制面 Pod.status，如何与 Karmada 回写互斥 | **必要的辅助契约**：无主动失效与单写者，Webhook 本身不保证旧 Ready 会消失 |
+| 只在平台诊断系统显示 `StatusUnknown` | 不改变 ARC 读取结果，也不改变 GitHub Runner 已注册状态 | 仅作故障诊断，**禁止宣称失效安全已经闭环** |
+
+**来源判定与输出协议**：
+
+1. `controlPodUid` 唯一标识 ARC 管理的控制面 Runner Pod；由 Binding/Work 找到且只找到一个当前成员 `targetCluster`，关联该成员 `memberPodUid`、Namespace/Name、Propagation 版本与实际观察时间。不同集群的 `resourceVersion` 不比较新旧，不凭相同 Pod 名推断身份相同。
+2. 对当前目标成员读取的 Pod.status，只有 UID/目标一致、Member API 仍可信、状态采样未超过已批准的新鲜度门槛时，才可复制 ARC 需要的 `phase`、`conditions`、`containerStatuses[].name/state/ready`。**状态源识别和字段完整性是同时成立的条件**，不得只保留旧 Ready 同时补充一个平台告警。
+3. 目标 Member 丢失、状态过期、Pod UID 变化、多个 statusItems、Binding/Work 冲突、成员不可达或 Runner 删除中时进入 `StateUntrusted`：状态选择者必须使**ARC 实际读取的控制面 Pod 不再呈现可信的旧 Ready**，并保留非敏感原因/最后可信时间。该动作的合法状态写入、版本条件与用户可见状态由所选 Karmada 版本及 ARC 读取路径决定，**不能直接伪造 Kubernetes 原生 Condition 或跨控制器写权**。
+4. **主动失效**：除状态事件触发外，还必须依据成员健康/采样心跳和可配置 TTL 进行主动重新判断，保证失联但无新事件不会让控制面旧 Ready 无限保留。监听型解释器本身不一定具有定时调谐保证；若扩展点无法产生或写入超时失效状态，视为**未实现完整仲裁能力**。
+5. **单一写入权**：同一个控制面 Pod 的 `status` 只允许一个有效仲裁/聚合路径；Karmada execution controller 的原生 status 同步、ResourceInterpreter Lua/Webhook 和独立协调器之间必须按目标版本确认更新优先级、冲突处理及写入身份。**不可用两个独立写者争相回写 Ready/Unknown**。
+6. **Runner 注册与 Job 分配边界**：ARC/Karmada 的 Pod Ready 仅为 Runner 生命周期观察事实；GitHub 以自己记录的 Runner `Idle/Active/Offline` 和注册/连接行为进行作业分配。若成员失联但 Runner 与 GitHub 仍连通，状态仲裁不应声称能够阻止其接收 Job；需要更强阻断时必须另定**实际 Runner 注册或服务撤销的受控接口**，且不得在身份/终态不明时额外启动同一 Job。
+7. **降级选择**：若目标 Karmada/ARC 版本无法满足上述单一写者、目标来源、新鲜度、主动失效和 ARC 可见读路径，保持当前**已创建 Runner 单目标、无自动跨成员重选**；停止对来源不可信成员的**新容量放行**，标记 `StateAuthorityUnknown`，以 GitHub Runner 实际状态排查既有作业。不把平台 `StatusUnknown` 诊断等同于已完成的 ARC/GitHub 运行时隔离。
+
+**状态判定及允许动作**：
+
+| 事件或状态 | ARC 可见状态要求 | GitHub/生命周期限制 |
+|---|---|---|
+| 唯一活动 Binding/Work，成员 Pod UID 与目标一致，状态采样新鲜且 Ready | 允许将完整、真实的 Member Pod Ready/容器状态聚合给 ARC | 不能因此推导 GitHub Runner 已注册或 Job 开始 |
+| 成员失联、状态超过 TTL，控制面仍存旧 Ready | 由主动失效责任方撤销 ARC 可见的**旧 Ready 结论**；无法可靠写入则记录 `StateAuthorityUnknown`、停止新的相关放行 | 已在线的 GitHub Runner 不一定 Offline；不能仅根据 Pod 状态主动重新派发 Job |
+| 控制面 Binding 改为 B，仍收到 A 的旧 Ready | 拒绝 A 的状态为新目标事实；B 未确认前保持不可信而非任选最先到达项 | 旧 Job 状态未知时，不复制 Runner 或自动重选旧任务 |
+| 同名 Pod 删除后重建，member UID 改变 | 旧成员状态事件不能覆盖新 Pod 实例 | ARC 原生 Runner 实例和 GitHub runner ID 分开核查 |
+| 解释器 Webhook 不可达、两个 Writer 冲突或超时机制失效 | 不宣称已有 ARC 可见状态仲裁成功；进入保守限制和告警路径 | 不关闭认证/TLS、不清理未知 Finalizer、不擅自注销运行中的 Runner |
+
+**运行时序（目标扩展点，不代替上游 API 证据）**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as 成员 Kubernetes Pod.status
+    participant B as Karmada Binding/Work
+    participant A as 目标状态仲裁者
+    participant CP as Karmada 控制面 Pod.status
+    participant ARC as ARC Controller
+    participant GH as GitHub Runner 服务
+    M-->>A: 提供成员 Pod UID / 状态与观察时间
+    B-->>A: 提供唯一活动成员目标
+    alt 身份与新鲜度可信
+        A->>CP: 通过经版本确认的单写入路径聚合真实状态
+        ARC->>CP: 读取 Runner Pod 状态
+    else 来源冲突/成员失联/超时
+        A->>A: 主动健康与 TTL 失效重评估
+        A->>CP: 经确认的写入路径使旧 Ready 不再被视为可信
+        ARC->>CP: 读取未确认状态
+    end
+    Note over ARC,GH: GitHub Runner 注册与 Job 接单不受 Pod Ready 单独控制
+```
+
+<p align="center">图 4-4 ARC 可见 Runner 状态的来源选择与主动失效</p>
+
+说明：目标扩展点须证明控制面状态的单写入路径；GitHub Runner 接单状态仍由 GitHub 独立决定。
+
+**接口证据与待确认参数**：[Karmada Customizing Resource Interpreter](https://karmada.io/docs/userguide/globalview/customizing-resource-interpreter/) 明确 Lua 与 Webhook 的 `AggregateStatus` 和优先级规则；[GitHub Runner Status](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot) 独立描述 Runner 的 Idle/Active/Offline。目标 API 对 Binding 身份查询、成员 Pod UID、状态写入、事件遗漏后的定时失效、ARC 所读取字段与 GitHub Runner 登记/撤销接口仍需选定版本逐项确认。**设计明确责任和不可违反的规则，不宣称上游组合现成提供所有机制。**
+
 ## 4.6 SP-08 NPU 资源规格设计
 
 **场景：** vLLM 一次 CI 可能需要约 36 张卡，但这不等于单 Pod 需要单节点 36 卡。若它由多个 Pod 跨节点协同运行，则必须先满足各 Pod 的资源请求及同成员 Gang/拓扑约束。跨成员空闲量之和不代表整组可启动。成员选择须依据真实的节点资源、拓扑约束和设备类型；节点调度及设备分配由成员 Kubernetes 和设备插件完成。
