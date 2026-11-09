@@ -550,7 +550,15 @@ erDiagram
 
 **架构决策（D）**：**Dispatcher 负责跨成员排队、资源容量判断、选择成员以及放行 ResourceBinding；成员 kube-scheduler/Volcano 负责将真正请求 NPU 的 Pod 绑定到具体节点。** Karmada 提供联邦 API、Binding/Work 和成员分发，不在 Karmada 控制面替代成员节点调度。当前 Manifest 没有 Dispatcher；此处是目标设计，不表示已经实现。
 
-**资源对象区别**：ARC 管理的 Runner Pod 与 workflow/step Pod 不是同一对象。使用 `containerMode` 和 runner-container-hooks 时，Runner Pod 可以只消耗 CPU，真正的 NPU 请求由成员集群内创建的 workflow Pod 声明；不使用 container mode 时 Job 可直接在 Runner 内执行，必须以实际工作负载模板确定哪一个 Pod 申请设备。成员放置决策与设备占用统计不能把 CPU Runner Pod 当作已分配 NPU 的事实。
+**执行对象区分（D）**：Runner Pod、Job Container Pod 与 NPU Workload Pod/PodGroup 是不同的逻辑角色，不要求三者始终对应三个 Pod；具体对象依赖执行模式。Runner Pod 提供 GitHub Job 接单与控制面连接，可仅申请 CPU；在 ARC Kubernetes container mode 中，runner-container-hooks 通常为容器化步骤创建 Job Container Pod；多机 NPU Workload 由受信任的成员工作负载模板/控制器创建各 NPU Pod 及 PodGroup。非 container mode 也可能在 Runner Pod 内直接请求 NPU，应以该实际 Pod 的资源请求为准。
+
+| 执行对象 | 创建/管理责任 | 容量和放置语义 |
+|---|---|---|
+| Runner Pod | ARC 经 Karmada 传播到唯一成员 | 供给/注册与任务入口；CPU Ready 不代表 NPU 已分配 |
+| Job Container Pod（如适用） | 成员 Runner 的 container hooks | 执行工作流容器步骤；自身如申请 NPU，必须纳入 Profile 与成员可行性判断 |
+| NPU Workload Pod/PodGroup（如适用） | 成员可信模板/工作负载控制器，成员 Volcano 调度 | 对逐 Pod requests、拓扑和 Gang 独立进行 Node 调度，关联原 Runner/grant；无需与 CPU Runner 固定同节点 |
+
+**同节点耦合约束**：是否在 Job Container Pod 设置 `spec.nodeName` 或强制 `nodeAffinity`，取决于锁定的 hooks 版本、Pod 模板与工作目录机制；不能将历史版本行为写成所有版本的固定能力。对于需要独立调度的 NPU Pod/PodGroup，工作目录、缓存、产物与状态通道应使用在跨节点情况下仍成立的机制（例如受控的共享存储或 API/对象存储传递），不能依赖 Runner 节点本地 `emptyDir` 或无法跨节点的挂载。若实际扩展模板强制 Job Pod 同节点，则该限制必须计入 Profile 可行性，或明确切换为有证据的解耦执行模式；**Kubernetes mode 不自动等于多机 Gang 支持**。参考 [GitHub ARC Runner Scale Sets](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[runner-container-hooks v0.8.1 createJobPod](https://github.com/actions/runner-container-hooks/blob/v0.8.1/packages/k8s/src/k8s/index.ts)、[Hook Extensions ADR](https://github.com/actions/runner-container-hooks/blob/main/docs/adrs/0134-hook-extensions.md)。
 
 | 层级 | 决策主体 | 输入与输出 | 不承担的职责 |
 |---|---|---|---|
@@ -568,7 +576,7 @@ erDiagram
 
 **容量事实与并发契约**：Dispatcher 记录 `allocatable − 已占用请求 − 未落地授予 − 其他租户占用` 的可用量；未落地授予以 Runner/Binding UID、成员与资源请求关联，直到真实 workflow Pod 绑定并纳入成员容量快照才对账核销。成员不可达、快照过旧、设备拓扑未知、账本重建未完成时标记 `CapacityUnknown`，不得把 Unknown 当作可用容量或进行盲目放行。异步快照不产生物理原子预留保证。
 
-**工作负载与节点耦合前提**：必须核对所用 runner-container-hooks 版本是否把 workflow Pod 强制固定到 Runner Pod 节点（`spec.nodeName` 或 required NodeAffinity）。若存在强制同节点，Dispatcher 仅选成员不足以保证后续 NPU workflow 能被节点调度器独立放置；应优先在适用的 container mode 中解除不必要的同节点耦合，或明确另一种受约束放置路径。在确认该前提前，**不得宣称成员调度器能独立为 NPU 工作流选择任意节点**。
+**工作负载与节点耦合前提**：按锁定的 ARC/hooks 版本及实际 Job Pod 模板检查 `spec.nodeName`、required NodeAffinity、PVC 访问模式、工作目录及产物传递。成员 NPU 工作负载若独立于 Job Container Pod 创建，其 PodGroup 的 Node 选择必须不受 CPU Runner 的无关亲和性限制；若直接由 Job Container Pod 申请 NPU，则必须将其真实 Node/卷约束纳入成员准入。任何跨节点数据访问和回收路径都必须有明确责任组件与失败出口，不能只移除 nodeAffinity 就宣称解耦成功。
 
 **分层运行时序**：
 
@@ -1956,11 +1964,13 @@ F-06 负责将 Runner Service 的预调度 NPU 需求转换为成员容量准入
 | 单 Pod NPU 工作负载 | 依据 Profile 选择存在完整可放置 Node 的成员，不指定 Node | kube-scheduler/Volcano 对真实 NPU Pod 进行 Filter/Score/Bind |
 | 多 Pod/Gang NPU 工作负载 | 依据 Profile 的 Pod 数量、逐 Pod requests、最小同时运行数和拓扑，选择**整组可行的一个成员**；保护所需的一组候选节点容量 | Volcano 的 PodGroup/Gang 负责同成员各 Pod 的原子调度阶段、节点绑定和 PodGroup 状态；kubelet/Device Plugin 负责节点上设备分配 |
 
-成员 Volcano 的具体调度对象可以是 PodGroup 或 VolcanoJob，须与使用的工作负载控制器和目标版本一致；不能假定 runner-container-hooks 自动创建多机 PodGroup。参考 [Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/) 与 [VolcanoJob](https://volcano.sh/docs/concepts/volcanojob/)。
+**执行路径契约（D）**：对于 container mode，ARC 创建/传播 Runner Pod；container hooks 可以创建 Job Container Pod，但不会天然完成多机任务的 PodGroup 组装。需要多机 NPU 时，由成员内可信模板/控制器创建与当前 Runner/grant 关联的 NPU Pods、PodGroup/VolcanoJob，并向 Runner 反馈结果；工作负载创建权限必须限定在所属命名空间/服务身份。单 Pod 直接由 Job Container Pod 执行 NPU 时，必须核对该 Pod 的 NPU requests 与工作目录/亲和性要求。Runner Pod 的 Ready、Job Pod 的 Running、NPU PodGroup 达到 Gang 条件及 GitHub Job 完成是独立事实。
+
+**跨节点条件**：成员必须在 Job Pod、NPU Pods 之间提供可验证的数据/模型/产物通道；不得把同节点 `emptyDir` 或 PVC 单节点访问能力当成跨节点共享。Pod 创建失败、Gang 不可调度、凭证或数据不可达时，保持同一 GitHub Job 身份并报告成员异常，不能擅自生成替代 Job。PodGroup/VolcanoJob 须与目标 Volcano 版本匹配；不能假定 runner-container-hooks 自动创建多机 PodGroup。参考 [Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/) 与 [VolcanoJob](https://volcano.sh/docs/concepts/volcanojob/)。
 
 ### 5.6.4 设计思路
 
-Dispatcher 先取得 Runner Service Profile，检查成员授权/设备/拓扑/容量和未落地 grant；符合要求时放行**唯一成员**的 Runner Binding。Karmada Work 传播 Runner 和 JIT，成员工作负载控制器在 Job 到来后创建实际 NPU Pod/PodGroup，成员 Volcano 按 Node 和 Gang 约束调度；实际资源请求与 grant 对账。资源未知、成员不可行或 Profile 不能匹配时，按 PL-D07 保留真实异常，不自造第二个 GitHub Job。若 hooks 把 workflow Pod 固定到 CPU Runner Node，必须遵守该约束或使用受支持的解耦路径。
+Dispatcher 先取得 Runner Service Profile，检查成员授权/设备/拓扑/容量和未落地 grant；符合要求时放行**唯一成员**的 Runner Binding。Karmada Work 传播 Runner 和 JIT，成员工作负载控制器在 Job 到来后创建实际 NPU Pod/PodGroup，成员 Volcano 按 Node 和 Gang 约束调度；实际资源请求与 grant 对账。资源未知、成员不可行或 Profile 不能匹配时，按 PL-D07 保留真实异常，不自造第二个 GitHub Job。Runner、Job Container 与多 Pod NPU Workload 的实际对象数取决于执行模式。若 Job Container Pod 自身请求 NPU，按其真实亲和性和资源请求做节点准入；若 NPU Workload 独立创建，使用可信控制器与跨节点可用的数据/结果通道，且不得继承 CPU Runner 的无关同节点限制。只有在目标 hooks/模板/存储配置经接口核对后，才宣称可由成员 Volcano 独立选择 NPU Node。
 
 #### 5.6.4.1 UC-07 按 Profile 选择成员并执行 NPU Job——运行时序（US-08）
 
@@ -2065,6 +2075,7 @@ sequenceDiagram
 |---|---|---|---|---|---|
 | Runner 服务与 Dispatcher | `runs-on`/Scale Set + **平台 Profile 逻辑契约** | 可信服务标识 → Profile 版本、设备资源名、逐 Pod NPU/CPU 请求、拓扑、PodGroup 最小成员数 | Profile 发布者可信，版本可追溯；稳定服务规格或有额外可信资源需求来源 | `ProfileUnknown` 时不按零卡放行；Profile 不是 GitHub/ARC 原生字段 | ARC-1、PL-D07；SR-06-01 |
 | Dispatcher 与 Karmada | Runner `ResourceBinding`、`Work`、grant（逻辑记录） | Profile + 容量事实 → 唯一 Cluster，Binding Hold/Release | 独立 Binding Writer，成员授权/完整资源组可行 | 不设置 NPU Pod 的 `nodeName`，容量预估不是物理原子授予 | KAR-1；PL-D02/D03/D07 |
+| Runner、hooks 与成员工作负载控制器 | `Job Container Pod`、可信 NPU 工作负载模板及关联标识 | Runner 接单后创建容器执行环境；多机任务按 Profile/grant 创建 NPU Pods 与 PodGroup，回传执行状态 | 模板/控制器具有受限的成员 API 权限；工作目录、模型/产物/日志通道跨节点可用 | hooks 版本和工作卷访问模式不得隐含不必要同节点约束；创建失败不重新派发 GitHub Job | [Hook Extensions](https://github.com/actions/runner-container-hooks/blob/main/docs/adrs/0134-hook-extensions.md)、PL-D02/D07；SR-06-02 |
 | 工作负载控制器与成员 Volcano | 实际 `Pod`、`PodGroup` / `VolcanoJob` | 真实 Pod requests/PodGroup → 成员内 Node 绑定与 Gang 进度 | Profile 相符、调度入口/插件/拓扑可用；工作负载控制器负责创建对象 | hooks 并不自动保证多机 PodGroup；不满足 `minAvailable` 保持不可调度 | Volcano Gang、SP-08；SR-06-02 |
 | 成员准入/Dispatcher 对账 | Pod requests/PodGroup UID、Profile/grant 版本 | 检验实际规格与预留一致，报告 `ResourceMismatch`/实际资源占用 | 成员准入需有可信匹配字段和拒绝机制 | 仅告警不等于完成准入；不能自行复制 GitHub Job | PL-D07；SR-06-03 |
 | kubelet 与 NPU Device Plugin | Kubernetes Device Plugin API | 对已绑定 Node 上的 Pod 调用 Allocate，暴露健康设备 | 设备插件发布真实资源，名称与 Profile/Pod 一致 | 设备不足不降级 CPU 或合并跨成员设备 | K8S-3、SP-08 |
