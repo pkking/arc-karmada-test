@@ -705,7 +705,7 @@ sequenceDiagram
 
 | 设计输入 | 责任主体与规则 | 约束 |
 |---|---|---|
-| nightly 的任务 Pod | 工作流/Pod 模板或可信 hooks 在**成员 Pod 创建时**写入低优先级 `priorityClassName` | 类名存在于成员集群；声明位置在实际 NPU Pod 而非联邦 Binding |
+| nightly 的任务 Pod | 优先由 nightly 所提交的真实 NPU Pod/VolcanoJob 模板声明低优先级 `priorityClassName`；若由 hooks 生成，则需可靠的成员侧差异化模板来源 | 不能只在 CPU Runner Pod 或所有共享 Runner 的静态 Hook 模板设置相同类；详见 4.3.8.1 |
 | PR 的任务 Pod | 不设置低优先级，或使用经授权的高优先级类 | 同一成员 Volcano 调度队列中，PR 排在低优先级 nightly 前；不可由任意来源滥用高优先级 |
 | Volcano | 启用版本兼容的 `priority` plugin；依据 Node 资源和拓扑完成成员内调度 | `PriorityClass` 不能让 Dispatcher 重排尚未放行的 Runner Binding |
 | 不抢占现有任务 | 目标是优先调度**待运行**任务，不驱逐正在运行的 nightly | 目标 Volcano 调度配置不得开启会对现有 NPU Pod 造成抢占/回收的 `preempt` / `reclaim` 路径；`preemptionPolicy: Never` 仅约束该类 Pod **主动发起抢占**，并不防止其他高优先级 Pod 抢占它 |
@@ -720,6 +720,26 @@ sequenceDiagram
 4. Dispatcher 的 Reserve Node taint/同组 Hold 仍生效；Volcano 的 Priority Plugin 不能解除污点、成员授权或独立 Runner 的联邦预留。两级调度只共享资源容量和实际 Pod 调度反馈。
 
 **官方依据**：[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Actions：Allocate、Preempt 与 Reclaim](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass 与非抢占优先级](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。具体优先级数值、PriorityClass 名称、Volcano scheduler 配置及 Pod 模板来源是部署参数；**本设计不要求 Dispatcher 增加 Job 识别接口**。
+
+
+#### 4.3.8.1 PriorityClass 的设置入口与权限契约
+
+**选择的主路径（D）**：由 **nightly 工作流所创建的真实 NPU 负载**（Pod、VolcanoJob 的 Pod 模板或其 PodGroup）声明低优先级 `priorityClassName`，PR 工作负载保持正常优先级。两者仍可使用同一个 `runs-on` 和 ARC Runner 服务；Dispatcher 不需要认识 Job 的 PR/nightly 类别。优先级只在**成员 Volcano 已接收的工作负载**范围内生效，不取代联邦 FIFO/Reserve/Backfill。
+
+| 实际 NPU 工作负载入口 | 负责写入 `priorityClassName` 的主体 | 约束与结论 |
+|---|---|---|
+| nightly 在成员 API 中创建 Kubernetes Pod/Job 或 VolcanoJob | nightly 受控的 NPU 工作负载 Pod 模板；使用 VolcanoJob 时同步 Job/PodGroup 的优先级 | **推荐目标**：优先级与真实 NPU 工作负载绑定，保留同一 Runner `runs-on`；必须保证使用成员 Volcano 调度入口 |
+| ARC Kubernetes mode 的 runner-container-hooks 自动创建容器工作 Pod | 受控的 Hook PodSpec 模板或成员准入/模板组件 | 官方 Hook Extension 可修改 PodSpec；但**同一 Runner Service 上的一份静态模板不能天然区分 PR/nightly**。无可靠的成员侧区分依据时，不得声称可对两类自动应用不同优先级 |
+| Job 直接在 Runner Pod 内运行且该 Runner Pod 申请 NPU | 该 Runner Service 的 Runner Pod 模板 | 只有当该服务的负载类别一致时可静态设置；混用 PR/nightly 的 Runner Pod 不能凭相同模板区分 |
+| 未能证明 NPU Pod 模板中的优先级来源 | 无权威来源 | 采用默认成员调度优先级，记录 `PriorityUnspecified`，不把 Dispatcher 当作分类补丁 |
+
+**可信与公平边界**：PriorityClass 为成员集群级资源，名称和数值由平台配置保持一致；只有被授权的 nightly 模板/工作负载身份可以使用相应类别。用户提交的任意 Workflow、PR 标签或容器字段不得通过未受控的 PodSpec 注入升为平台保留的高优先级。具体通过命名空间/ServiceAccount 归属与 Kubernetes admission 规则约束。高优先级变更不允许覆盖设备申请、成员授权或 Dispatcher 的有效 Reserve Node taint。
+
+**无抢占约束**：正常模式只改变成员待调度 Pod/PodGroup 的排序；不得因 PR 到来驱逐已运行的 nightly。必须按目标 Volcano 版本确认 scheduler **actions** 中 `preempt`/`reclaim` 是否启用，并保证所需的 `allocate`/`enqueue`/`gang` 组合不会导致意外抢占。Kubernetes `PriorityClass.preemptionPolicy: Never` 只阻止该 Pod 主动抢占，不能阻止其他工作负载抢占它，**单靠该字段不满足全局不抢占目标**。
+
+**场景判据**：在同一成员内，PR 与低优先级 nightly 均已 Pending 且可行时，Volcano 的 Priority Plugin 应优先调度 PR；已有 nightly 运行时，PR 等待资源释放。若 nightly Pod 没有实际的低优先级类、PodGroup 与 Pod 优先级不一致，或未进入 Volcano 调度器，诊断应判为成员模板/调度配置问题，不归因于 Dispatcher。
+
+**上游依据**：[GitHub ARC Hook Extensions](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Scheduler Actions](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。
 
 ### 4.3.9 Dispatcher 故障接管与安全降级（PL-D06）
 
@@ -1062,7 +1082,7 @@ F-01～F-06 的接口和质量约束由 SP-01～SP-09 统一规定；故障影�
 | QA-08 资源泄漏与故障恢复 | Dispatcher Leader 故障，成员存在仍有效的 reserved Node taint | 新 Leader 对账恢复账本，成员 Janitor 对到期保护按归属清理，恢复互斥放行 | 不得因 Dispatcher 故障永久占有节点；降级需显式宣告公平策略减弱；PL-D03、F03-07/09 |
 | QA-09 资源预留准确性 | 队首获得候选 Node 预留，但真实 workflow Pod 最终绑定另一个 Node | 由成员 Scheduler 选真实 Node，Dispatcher 观察 PodScheduled 后核对、迁移或释放保护记录 | 不能把 reserved Node 误记作 NPU 已占用或队首已兑现；PL-D02/D03、F03-08 |
 | QA-10 公平性正确性 | 相同权重甲租户运行 16 卡×1 h，乙运行 2 卡×1 h | PL-D04 按同资源族 NPU 卡时计算服务量，分别扣除未落地 grant，公平选择下一候选 | Job 数相同不等于公平；异构 NPU 家族不可直接合并；F03-10 |
-| QA-11 成员任务优先级 | 相同 runs-on 的 PR/nightly 已经在同一成员创建实际 NPU Pod；nightly Pod 指定较低 PriorityClass | PL-D05 要求 Volcano Priority Plugin 识别 NPU Pod priorityClassName，优先调度符合条件的 PR Pod | 未放行 Binding 不受成员 PriorityClass 影响；禁用抢占时不驱逐正在运行的 nightly；F03-11 |
+| QA-11 成员任务优先级 | 相同 runs-on 的 PR/nightly 在同一成员创建真实 NPU Pod；nightly 模板使用较低 PriorityClass | PL-D05/4.3.8.1：nightly 工作负载或可信 hooks 在**实际 NPU Pod**声明低优先级，Volcano 排序 | 同一个静态 Hook 模板无法自动区分 PR/nightly；不能驱逐已经运行的 nightly；F03-11 |
 | QA-12 故障降级互斥性 | Dispatcher 仍续约 Leader Lease，但决策循环已停止；应急实例准备接管 | PL-D06 检测真实调度进度；确认旧 Writer 停止后才可 DEGRADED，否则 FAIL_CLOSED | 不允许双写、旧资源预留被忽略或 Job 重复分发；F03-12/13 |
 | QA-13 NPU 需求先验正确性 | 相同 Runner Service 接受 2 卡或 36 卡不同请求，Runner Pod 只申请 CPU | PL-D07 要求可信服务 Profile 或放行前资源需求关联；无法知道完整 NPU 需求时产生 ProfileUnknown，不按零卡肯定放行 | 不把 CPU Runner Ready 视为 NPU 成员容量保证；F06-04/06、SR-06-01/03 |
 | QA-14 多节点 Gang 可行性 | 总共需要 36 卡的多 Pod 工作负载，某成员聚合卡数充足但节点间拓扑不满足完整请求 | Dispatcher 判断**同成员整组**资源与拓扑可行性；成员 Volcano PodGroup/Gang 做最终 Node 调度；不足时保持不可调度 | 不要求单个 36 卡 Node，也不允许跨独立成员拼接 Gang；F06-05、SR-06-02 |
@@ -1489,7 +1509,7 @@ sequenceDiagram
 | PL-12 | Dispatcher 重启或切主后必须重建队列及账本；Binding 写者互斥，租约具备失效清理 | 两个 Leader 不得同时放行；Dispatcher 退出不能使 Node 永久被 taint |
 | PL-13 | Dispatcher 不处理 PR/nightly 类别、分时窗口或 PriorityClass；只管理联邦公平和队首保护 | nightly 低优先级由真实 NPU Pod 声明；不得把成员的优先级当作 Binding 放行优先级 |
 | PL-14 | 跨租户按同一资源族的 NPU 卡时和批准权重仲裁；未落地授予与已完成服务分开计量 | 16 卡×1 小时与 2 卡×1 小时不能视为相同服务；PL-D04 |
-| PL-15 | nightly NPU Pod 应携带低优先级 priorityClassName，由成员 Volcano 排序；不允许不受控抢占 | 只有 CPU Runner Pod 配置 PriorityClass、实际 NPU workflow Pod 未配置时不满足目标；PL-D05 |
+| PL-15 | nightly 实际 NPU Pod/VolcanoJob 声明低优先级，由成员 Volcano 排序，未经授权不可升权且不得抢占运行中的 Job | 同一 runs-on 的静态 Hook 模板不能凭空区分 PR/nightly；CPU Runner Pod 设置类不等于 NPU Pod 生效；PL-D05 |
 | PL-16 | 应急调度接管前必须确认原 Binding Writer 失效 | 决策停止但进程仍续约不能判定 Dispatcher 健康；PL-D06 |
 | PL-17 | 切主先对账持久化 grant、Node 预留及实际 NPU Pod；未知容量停止放行 | 空账本不是节点空闲；应急和 Dispatcher 不能双写；PL-D06 |
 
@@ -1513,7 +1533,7 @@ sequenceDiagram
 | F03-08 | 回填任务持有过宽 Toleration 或同组未被 Hold。 | 后继任务占用队首保护容量，FIFO 承诺失效。 | 对照 Runner group、Node taint、workflow Pod 的实际 NodeName。 | 仅精确 Equal 容忍，同组后继 Hold；错误保护须告警并恢复。 | Dispatcher/成员调度维护者 |
 | F03-09 | 两个 Dispatcher 实例或降级调度器同时放行 Binding。 | 重复分发或队列顺序不可信。 | Leader Lease、Binding resourceVersion、放行决策记录。 | 只保留单写者；完成状态恢复后才放行，接管与降级互斥。 | Dispatcher/联邦控制面维护者 |
 | F03-10 | 跨租户按 Job 数而非 NPU 卡时排序，或窗口计量遗漏已运行任务。 | 高耗资源租户长期占优，公平目标失效。 | 比对租户 NPU Pod 卡时、权重、grant 和仲裁决策。 | 按 PL-D04 在同资源族使用实际分配卡时加权仲裁；数据未知则不宣称公平保证。 | Dispatcher 公平策略维护者 |
-| F03-11 | nightly 低优先级未传到实际 NPU Pod，或 Volcano 调度未启用 Priority Plugin。 | 同成员 PR/nightly 等待顺序未受预期优先级控制。 | 检查实际 NPU Pod 的 priorityClassName、schedulerName、PodScheduled 及 Volcano 插件/动作配置。 | PL-D05：在 workflow Pod 而非仅 CPU Runner Pod 设置优先级；校验 Volcano Priority Plugin，禁止不受控抢占。 | 成员调度/工作流模板维护者 |
+| F03-11 | nightly 低优先级未传到实际 NPU Pod，或共享 Runner 的静态 Hook 模板未区分类别。 | 成员 PR/nightly 等待顺序无效，或任务被错误升权。 | 对比实际 Pod/PodGroup priorityClassName、提交身份、schedulerName 和 Volcano 插件配置。 | PL-D05：nightly 负载模板设置低优先级，校验准入授权与 Priority Plugin，禁用不受控抢占。 | 成员调度/工作流模板维护者 |
 | F03-12 | Dispatcher 租约续约但决策停滞，Watchdog 只看 Lease。 | 全部新增任务长期 Hold。 | 最后成功决策循环、采集新鲜度、放行进度与 Lease 差异。 | PL-D06：独立进度健康检查，进入 RECOVERING/安全降级或 FAIL_CLOSED。 | Dispatcher/Watchdog 维护者 |
 | F03-13 | 网络分区造成旧 Dispatcher 与应急 Scheduler 双写。 | Binding 目标冲突或重复传播，资源账本错误。 | 写者身份、进度与 Binding 版本/目标事件。 | PL-D06：证明旧 Writer 失效后才接管；无法排他就 FAIL_CLOSED。 | 联邦控制面维护者 |
 
@@ -1531,7 +1551,7 @@ sequenceDiagram
 | F03-08 | 同组后继绕过 Hold、宽泛 toleration 抢占队首 | 预留失效、队首饥饿 | 高 | PL-10/11；仅匹配 group 的 Equal Toleration、同组 Hold、预留违规观察 | 容忍 Exists/未 Hold 均不满足验收；出现非队首占用必须告警 | 与未纳管调度器之间存在共存约束 |
 | F03-09 | 多写者或恢复未对账就放行 | 任务重复传播、账本偏差 | 严重 | PL-12；唯一 Binding 写者、Leader/进度检测、Grant 重建、降级互斥 | 切主前后同 Binding 不能由两个写者放行；未知容量不进入新放行 | Lease 抖动及网络分区导致短时不可用 |
 | F03-10 | 按任务数量轮转而忽略 NPU 卡时与租户权重 | 小任务与大任务被错误等价，公平性失真 | 高 | PL-14、PL-D04：按真实 NPU 工作负载的卡时计量，grant 单独占容量预算 | 16 卡×1h 与 2 卡×1h 获得不同的服务量；跨设备家族分别计算 | 不可放置的大任务与非抢占长任务仍影响短期公平 |
-| F03-11 | nightly NPU Pod 缺少低优先级类或错误调度入口 | PR 在成员 Pod 队列中未按优先级先调度，或发生不预期的抢占 | 高 | PL-15、PL-D05：Pod 创建模板设置 priorityClassName；实际 NPU Pod 使用 Volcano Scheduler，启用 Priority Plugin | 同成员均 Pending 时按 PriorityClass 排序；已运行 nightly 不被策略抢占；与 Dispatcher Hold 分层独立 | 当前 workflow hooks 模板与 Volcano 调度动作是否满足需确认 |
+| F03-11 | nightly NPU Pod 缺少低优先级类，或低优先级被静态模板错误应用至所有共享 Runner | PR 在成员 Pod 队列中未优先执行或被错误降权 | 高 | PL-15/PL-D05：nightly 的真实 NPU Pod/VolcanoJob 指定 PriorityClass，Hook 生成 Pod 需有可信差异化来源；Volcano Priority Plugin 生效，禁用不受控抢占 | 同成员均 Pending 时 PR 在 nightly 前；运行 nightly 不被抢占；无类别输入时不应盲目应用共享模板 | Pod 来源与 Volcano Action 配置需与目标版本核对 |
 | F03-12 | Watchdog 只依据后台 Lease 判活 | Dispatcher 持续 Hold，排队 SLO 失效 | 高 | PL-16、PL-D06：决策进度与主动容量健康检查 | 决策循环停止但续约正常时，进入 RECOVERING/降级状态或 FAIL_CLOSED | 业务恢复阈值仍待批准 |
 | F03-13 | 降级接管时旧 Writer 仍能写 Binding | 多 Cluster 传播及对象身份争用 | 严重 | PL-16/17、PL-D06：接管前确认旧 Writer 已失效，重建 grant，更新版本冲突重查 | 旧 Writer 无法被排他时不进入 DEGRADED；不得并行更新同一 Binding | 网络分区下可用性降低，安全优先 |
 
@@ -2023,7 +2043,7 @@ F-01～F-06 的接口条件、调用主体和异常处理汇总如下。ARC、Ka
 | NPU 成员准入 | Dispatcher 基于 Runner Service Profile（PL-D07）做完整工作负载成员容量判断，成员 Volcano 调度真实 Pod/PodGroup | Profile 发布、可信服务身份、设备拓扑与成员 Node/Gang 可行性及容量估计仍需接口确认 |
 | FIFO/Reserve Node/Backfill | Dispatcher Hold/Release 与容量账本 | 成员保护机制、队首安全回填、租约过期及清理规则 |
 | 跨租户公平 | 按同资源族的卡时、权重仲裁 | 租户身份、权重、计量窗口和老化规则 |
-| PR/nightly 优先级 | 成员 Volcano 对真实 NPU Pod/PodGroup 使用 PriorityClass | PriorityClass 传入真实工作负载的模板/Hook 路径与抢占策略待确认；与 Dispatcher Profile 规格来源无关 |
+| PR/nightly 优先级 | nightly 实际 Pod/VolcanoJob 由工作流模板声明低优先级；hooks 自动创建 Pod 时由可信成员模板控制；成员 Volcano 排序 | 共享 Runner 静态模板不能自然区分任务类别；需核对 Pod/PodGroup 优先级、保留类使用权限及 Volcano Action 不抢占约束 |
 | Dispatcher 故障恢复 | 单 Writer、状态恢复及安全停止放行 | 互斥与旧 Writer 失效证明、恢复顺序及兼容机制 |
 | Profile 与实际工作负载一致性 | Dispatcher grant 持有 ProfileVersion，成员准入与真实 Pod/PodGroup 对账 | 服务内多种规格的可信需求来源、成员准入拒绝路径、PodGroup/Runner 关联协议 |
 | 性能和可用性 | 已区分 GitHub 排队、联邦等待、Gang 待调度和实际 NPU Pod 执行 | 业务认可的分位数、恢复时间、采样与统计窗口 |
