@@ -674,6 +674,43 @@ sequenceDiagram
 **参考方案：** 组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；其中的 Hold/Release、容量保护及 janitor 机制可作为接口参考；现有仓库尚未部署这些功能。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
 
 
+
+#### 4.3.6.1 Reserve Node 的保护粒度及多节点协同约束
+
+**架构选择（D）**：当前目标使用 Kubernetes Node `NoSchedule` taint 配合短租约、精确 Toleration 和 Dispatcher 同组 Hold。**保护粒度是整个 Node 的新 Pod 调度入口，不是精确的 NPU 卡数。** 这是一种保守的容量保护机制：若在 8 卡 Node 上为一项 2 卡任务创建保护，默认阻止其他不具备该保护组 Toleration 的新 Pod 使用**整台 Node**，不能把剩余 6 卡记作可供任意租户安全回填。正在运行的 Pod 不会因为 `NoSchedule` 被驱逐。[Kubernetes Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)。
+
+**方案选择与兼容边界**：
+
+| 保护方式 | 资源粒度与结果 | 设计选择 |
+|---|---|---|
+| Node `NoSchedule` + 短租约 + Group Hold | 整 Node 限制后续不匹配 Pod；只靠 Taint **不保证**队首会选择该 Node | **默认保守保护**；与成员 Volcano Node 选择权兼容，但有空闲卡损失 |
+| 将 `NoSchedule` 视作“仅保护 2/8 张卡” | 不成立，Node Taint 不表达设备切片 | 禁止作为账本/Backfill 依据 |
+| Volcano 定制成员调度策略、可证明的资源级预留协议 | 可以作为未来精细化保护方案，但需证明在成员 Node/PodGroup 层的真实资源锁定、授权和释放语义 | 独立专项设计；本方案不凭 Volcano 默认 Plugin 宣称支持精确卡级预留 |
+| 仅设置 ResourceQuota/Namespace 配额 | 限制资源总量，不能保证具体 Node 上的可放置空间 | 不替代 Reserve Node |
+
+**单 Pod 与多 Pod 的预留对象**：
+
+1. 单 Pod 资源规格需要一台可满足完整请求的候选 Node；Node 的可保留容量按该 Node 实际受保护的剩余可调度资源计入预算，而非仅按 Pod 的 2/4 卡 requests 记为“占用 2/4 卡”后再向其他任务开放其余卡。
+2. 多 Pod/Gang 的 Profile（PL-D07）应以**同一成员的一组候选 Node**为保护对象，包含 `reservationGroupId`、所属 Binding UID、profileVersion、所需各 Pod 资源/拓扑约束、集合版本、租期。所有候选 Node 均达到预期保护状态前，不得宣称整个 Gang 的容量保护成功。**不是跨成员 Node 集合**。
+3. Node 保护的建立、刷新、失效按实际成员 API 的对象版本/身份逐 Node 处理，不能假设写入多个 Node Taint 是 Kubernetes 原子事务。部分 Node 失败时，记录 `ReservationPartial`，立即使队首保护降为未确认并**按归属回滚已成功的部分**，防止泄漏；旧租约的 Node 只能由匹配归属和版本的控制器清理。
+4. Node Taint 只影响后续调度，不能为已运行 Pod 腾出 NPU 卡，也无法保证 Gang 任务完成绑定。Dispatcher 对预留集合持续对账 Node 占用及 Volcano PodGroup/PodScheduled，容量变化时重算可行性；若真实绑定不使用某候选 Node，释放对应保护并修正占用账本。
+5. 保护组 Toleration 必须由受信任的成员工作负载模板/准入路径对**队首实际 NPU Pod/PodGroup**授权，必须精确匹配 `key/value/effect`；同组后继仍需 Dispatcher Hold。未经授权的工作负载不得持有宽泛 `operator: Exists` 或通过直接设置 `nodeName` 绕过成员调度保护。
+6. **安全 Backfill 边界**：有 Node 保护时，其他任务只使用**不被保护的 Node**，并按其完整 Pod 或 PodGroup 请求判定可调度。若希望使用受保护 Node 的其他 NPU 卡，先设计能精确分割卡级资源且不会延迟队首的成员 Scheduler 约束；否则宁可降低短期利用率，也不能把保护容量与可回填容量双重计入。
+
+**容量与 DFX 计量**：把 `requestedNpuCards`（队首 Profile 需求）、`protectedNodeAllocatable`（保护节点的完整可调度资源）、`protectedNpuCardSeconds`（保护开销）、`actualBoundNpuCards`（真实 Pod 已绑定设备请求）及 `reservationPartialCount` 分开统计。**保护造成的闲置是可观测开销**，不能记为 NPU 已运行利用率；队列吞吐不能通过虚报部分卡级 Backfill 美化。监控 Node 保护耗时、集合不完整、租约泄漏、违规 Toleration 和外部绕过调度的写入。
+
+**失效与恢复判据**：
+
+| 情况 | 必须采取的行为 | 禁止行为 |
+|---|---|---|
+| 一台 8 卡 Node 为队首 2 卡预留，仍有 6 卡未被请求 | 保守保护整 Node 的新 Pod 入口，并把可能损失的卡时计入保护开销 | 将 6 卡当作普通 Backfill 可用额度，默认为 Taint 能实现卡级隔离 |
+| 多 Node Gang 预留 3 台中有 1 台写入 Taint 失败 | 标记 ReservationPartial，全部保护状态未确认；回滚前两台的本组保护或等待安全重试 | 在不完整 Node 集合上宣布队首有完整资源 |
+| 旧 Dispatcher 故障，成员存在过期保留 Taint | 成员 Janitor 按匹配归属、版本、租约撤销；新 Leader 先账本对账 | 无条件清除其他调度器的 Node Taint 或保留永久阻塞 |
+| 队首 NPU Pod 未携带精确 Toleration | 诊断 `ReservationAccessMismatch`，不能把保护成功等同于任务可运行 | 让 Dispatcher 直接设置 NPU Pod `nodeName` 绕过成员 Volcano |
+| 未管理的 Pod 使用 `nodeName` 或宽泛 Toleration 绕过保护 | 检测违规并冻结有风险的保护/新放行，依成员准入权限处理 | 宣称仅凭 `NoSchedule` 绝对保证 NPU 排他 |
+
+**限制**：Kubernetes 对 Node `NoSchedule` 的行为是原生事实；整 Node 保护、同组 Hold、Gang 成组租约和成员准入联动是本项目的目标集成设计，**不是原生 Taint 自带的全局资源预约协议**。如果目标成员无法保证精准 Toleration 和非受控调度绕过的治理，禁止宣称 Reserve Node 安全有效，须保守退化为 FIFO/等待策略。依据：[Kubernetes Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)、[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)。
+
 ### 4.3.7 跨租户加权公平仲裁（PL-D04）
 
 **设计决策（D）**：Dispatcher 在 PL-D03 的**可互换 NPU 资源族/拓扑域**内做跨租户加权公平仲裁；各租户内部按 FIFO 取出候选，**不参与 PR/nightly Pod 优先级排序**。公平计量用**已分配 NPU 卡时**而非 AI Core 利用率或 GitHub Job 数量；成员容量、拓扑和授权是硬约束，公平排序不得越过硬性准入。该机制不改变 GitHub 队列，也不抢占已运行 Pod。
@@ -1021,6 +1058,7 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 | Job 排队耗时 | GitHub Job 可获得的 queued/start 时间及 attempt ID | GitHub 的队列包括匹配/容量影响；无法据此精确分解成 ARC 或 Karmada 内部时间 |
 | ARC 需求响应 | Listener 接收可识别的需求事件 → ERS 期望值变化 | 必须使用相同 Runner 服务及事件关联；异步事件丢失时标记未知 |
 | Dispatcher 持有时间 | Binding 首次进入 Dispatcher 队列 → Binding 成功放行 Cluster，以联邦控制面事件为准 | 与 GitHub Job queued→started 不同；记录资源族、租户、ProfileVersion、单/多 Pod 形态、Hold 原因及取消样本 |
+| Reserve Node 保护开销 | 成员 Node 保护租约有效期 → 释放，按被保护 Node 的完整可调度 NPU 容量记录保护卡时 | 保护卡时与真实 NPU Pod 运行卡时分别统计；多 Node Gang 须记录完整组/部分失败，防止把 Node Taint 当作 2/8 卡精确预留 |
 | 联邦成员放置与传播等待 | Dispatcher 放行 Binding → 目标成员 Runner Pod 出现，分段记录 Work 到达 | 无候选与策略 Hold 不等于 Work 已分发；跨控制面时钟未同步不计算精确差值 |
 | 节点资源等待与启动准备 | 成员真实 NPU Pod/PodGroup 创建 → PodGroup 可调度/PodScheduled → 容器 Ready | 多 Pod/Gang 未达 `minAvailable` 的等待要与单 Pod FailedScheduling 区分；镜像、Secret、设备初始化单独归因，Pod Ready 不是 GitHub Job 已开始 |
 | Runner 注册耗时 | Runner 启动/注册相关事件 → GitHub 确认 Runner 可用 | 需要可靠的关联 ID，未暴露事件不能凭推断填数 |
@@ -1052,7 +1090,7 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 |---|---|---|
 | Job 匹配与排队 | GitHub Job、Scale Set | 无匹配、无授权、容量限制、GitHub API 错误 |
 | Runner 需求/创建 | Listener、ERS/ER、ARC Controller 事件 | 需求未见、期望与实际数量差、Pod/JIT 创建失败 |
-| Dispatcher Hold 与联邦放置 | 队列时间/Policy、ResourceBinding/grant、Work | 无合格成员、Group Hold、ReserveForHead、CapacityUnknown、Backfill、放行冲突和成员同步失败 |
+| Dispatcher Hold 与联邦放置 | 队列时间/Policy、ResourceBinding/grant、Work、Node Taint/租约 | 无合格成员、Group Hold、ReserveForHead、ReservationPartial、容量未知、Backfill、放行冲突、保护开销及成员同步失败 |
 | 节点与依赖准备 | 成员 Node/Pod/PodGroup/Secret 事件 | ProfileUnknown、ResourceMismatch、Gang Unschedulable、FailedScheduling、FailedMount、ErrImagePull、设备资源不足 |
 | Runner 注册与执行 | ARC Runner 与 GitHub Job | 注册失败、Pod Ready 但 GitHub 未确认、Job 中断/完成 |
 | 状态与回收 | 成员 Pod.status、控制面聚合、Work/Finalizer | 状态缺失/过期/多来源冲突、删除未知或残留 |
@@ -1086,6 +1124,8 @@ F-01～F-06 的接口和质量约束由 SP-01～SP-09 统一规定；故障影�
 | QA-12 故障降级互斥性 | Dispatcher 仍续约 Leader Lease，但决策循环已停止；应急实例准备接管 | PL-D06 检测真实调度进度；确认旧 Writer 停止后才可 DEGRADED，否则 FAIL_CLOSED | 不允许双写、旧资源预留被忽略或 Job 重复分发；F03-12/13 |
 | QA-13 NPU 需求先验正确性 | 相同 Runner Service 接受 2 卡或 36 卡不同请求，Runner Pod 只申请 CPU | PL-D07 要求可信服务 Profile 或放行前资源需求关联；无法知道完整 NPU 需求时产生 ProfileUnknown，不按零卡肯定放行 | 不把 CPU Runner Ready 视为 NPU 成员容量保证；F06-04/06、SR-06-01/03 |
 | QA-14 多节点 Gang 可行性 | 总共需要 36 卡的多 Pod 工作负载，某成员聚合卡数充足但节点间拓扑不满足完整请求 | Dispatcher 判断**同成员整组**资源与拓扑可行性；成员 Volcano PodGroup/Gang 做最终 Node 调度；不足时保持不可调度 | 不要求单个 36 卡 Node，也不允许跨独立成员拼接 Gang；F06-05、SR-06-02 |
+| QA-15 保护粒度与回填安全 | 8 卡 Node 为 2 卡任务保护，剩余 6 卡表面空闲 | PL-18：Node NoSchedule 以整 Node 阻止普通新 Pod；Dispatcher 只在其他未保护 Node 上 Backfill，并记录保护卡时开销 | Taint 不等于卡级预约，不能把 6 卡视作可安全回填或已运行卡时；F03-14 |
+| QA-16 Gang 预留失败恢复 | Dispatcher 为多 Pod Gang 保护 3 台 Node，第 3 台失败，Leader 随后失联 | PL-19：整组 ReservationPartial，按身份/租约回滚已保护 Node；新 Leader 和 Janitor 对账清理 | 不宣称部分成功即完整保护；不能清理其他调度器的 Taint；F03-15/16 |
 
 **可评审性门槛**：PL-D03～06 明确联邦 FIFO/Reserve/Backfill、跨租户公平、成员 Volcano PriorityClass 与降级设计，**当前 Manifest 不包含 Dispatcher 和 NPU 优先级模板**。后续必须对照实际 NPU Pod、Volcano Scheduler 插件及调度动作确认；不再要求 PR/nightly 放行前 Job→Runner→Binding 关联。设计不证明端到端排队 SLA。
 
@@ -1512,8 +1552,10 @@ sequenceDiagram
 | PL-15 | nightly 实际 NPU Pod/VolcanoJob 声明低优先级，由成员 Volcano 排序，未经授权不可升权且不得抢占运行中的 Job | 同一 runs-on 的静态 Hook 模板不能凭空区分 PR/nightly；CPU Runner Pod 设置类不等于 NPU Pod 生效；PL-D05 |
 | PL-16 | 应急调度接管前必须确认原 Binding Writer 失效 | 决策停止但进程仍续约不能判定 Dispatcher 健康；PL-D06 |
 | PL-17 | 切主先对账持久化 grant、Node 预留及实际 NPU Pod；未知容量停止放行 | 空账本不是节点空闲；应急和 Dispatcher 不能双写；PL-D06 |
+| PL-18 | Node `NoSchedule` 只阻止不容忍该 Taint 的**新 Pod 调度**，保护粒度是整个 Node 而非指定 NPU 卡数 | 8 卡 Node 为队首 2 卡任务保留时，剩余 6 卡不得按普通 Backfill 复用；计入整节点保护开销；见 4.3.6.1 |
+| PL-19 | 多节点 Gang 的候选 Node 保护按同成员整组授权、版本、租期对账；部分写入失败不可宣布完整预留 | 3 台 Node 有 1 台保护失败时标记 ReservationPartial 并安全回滚；同组 Pod 要有精确 Toleration；见 4.3.6.1 |
 
-**设计级验收边界**：PL-07～17 为目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义两级放置；PL-D03 定义 FIFO/Reserve/Backfill；PL-D04 定义公平计量；PL-D05 定义成员 Volcano Pod PriorityClass；PL-D06 定义故障降级。PriorityClass 相对顺序、Volcano 动作、权重及故障阈值为 P 类；不宣称跨集群 PR 优先、原子资源预约或无损切换。
+**设计级验收边界**：PL-07～19 为目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义两级放置；PL-D03 定义 FIFO/Reserve/Backfill；PL-D04 定义公平计量；PL-D05 定义成员 Volcano Pod PriorityClass；PL-D06 定义故障降级。PriorityClass 相对顺序、Volcano 动作、权重及故障阈值为 P 类；不宣称跨集群 PR 优先、原子资源预约或无损切换。
 
 ### 5.3.9 DFX分析
 
@@ -1536,6 +1578,9 @@ sequenceDiagram
 | F03-11 | nightly 低优先级未传到实际 NPU Pod，或共享 Runner 的静态 Hook 模板未区分类别。 | 成员 PR/nightly 等待顺序无效，或任务被错误升权。 | 对比实际 Pod/PodGroup priorityClassName、提交身份、schedulerName 和 Volcano 插件配置。 | PL-D05：nightly 负载模板设置低优先级，校验准入授权与 Priority Plugin，禁用不受控抢占。 | 成员调度/工作流模板维护者 |
 | F03-12 | Dispatcher 租约续约但决策停滞，Watchdog 只看 Lease。 | 全部新增任务长期 Hold。 | 最后成功决策循环、采集新鲜度、放行进度与 Lease 差异。 | PL-D06：独立进度健康检查，进入 RECOVERING/安全降级或 FAIL_CLOSED。 | Dispatcher/Watchdog 维护者 |
 | F03-13 | 网络分区造成旧 Dispatcher 与应急 Scheduler 双写。 | Binding 目标冲突或重复传播，资源账本错误。 | 写者身份、进度与 Binding 版本/目标事件。 | PL-D06：证明旧 Writer 失效后才接管；无法排他就 FAIL_CLOSED。 | 联邦控制面维护者 |
+| F03-14 | 将 Node NoSchedule 误当作 NPU 2/8 卡精确预留 | 后继任务错误 Backfill，破坏队首保护或统计虚高 | Node Taint、候选 Pod、资源账本与实际 Node allocatable 对照 | PL-18：整 Node 保护、整 Node 开销计量；禁止卡级余量的无证据回填 | Dispatcher/成员调度维护者 |
+| F03-15 | 多节点 Gang Node 预留只完成部分节点，仍宣布成功 | 队首工作负载无法同时启动，部分节点长期闲置 | 预留组中所有 Node 版本、租约、实际 Taint 与 PodGroup 状态 | PL-19：标记 ReservationPartial，按归属回滚或安全重试后才宣布整组保护 | Reservation Actuator/成员调度维护者 |
+| F03-16 | 不可信 Pod 使用宽泛容忍或 nodeName 绕过 Node Taint | 非队首占用保护资源、全局 FIFO 失效 | Node Taint、Pod Toleration、Pod nodeName 和提交身份 | 成员 admission 限定组权限与 PodSpec，发现绕过则冻结相关成员的新容量放行 | 成员 API 准入/Dispatcher 维护者 |
 
 **风险—措施—验证追踪**（关联：SR-03-01、SR-03-02、SR-NF-02/03；延续上方 FMEA 编号，不替代已有故障表）
 
@@ -1554,6 +1599,9 @@ sequenceDiagram
 | F03-11 | nightly NPU Pod 缺少低优先级类，或低优先级被静态模板错误应用至所有共享 Runner | PR 在成员 Pod 队列中未优先执行或被错误降权 | 高 | PL-15/PL-D05：nightly 的真实 NPU Pod/VolcanoJob 指定 PriorityClass，Hook 生成 Pod 需有可信差异化来源；Volcano Priority Plugin 生效，禁用不受控抢占 | 同成员均 Pending 时 PR 在 nightly 前；运行 nightly 不被抢占；无类别输入时不应盲目应用共享模板 | Pod 来源与 Volcano Action 配置需与目标版本核对 |
 | F03-12 | Watchdog 只依据后台 Lease 判活 | Dispatcher 持续 Hold，排队 SLO 失效 | 高 | PL-16、PL-D06：决策进度与主动容量健康检查 | 决策循环停止但续约正常时，进入 RECOVERING/降级状态或 FAIL_CLOSED | 业务恢复阈值仍待批准 |
 | F03-13 | 降级接管时旧 Writer 仍能写 Binding | 多 Cluster 传播及对象身份争用 | 严重 | PL-16/17、PL-D06：接管前确认旧 Writer 已失效，重建 grant，更新版本冲突重查 | 旧 Writer 无法被排他时不进入 DEGRADED；不得并行更新同一 Binding | 网络分区下可用性降低，安全优先 |
+| F03-14 | Node Taint 粒度被误判为卡级资源预留 | Backfill 违反保护、保护开销漏计 | 高 | PL-18；4.3.6.1 明确完整 Node NoSchedule 与受保护卡时独立计量 | 8 卡 Node 保护 2 卡时，剩余 6 卡不能作为普通 Backfill 安全容量 | 整节点保护牺牲短期利用率 |
+| F03-15 | 多 Node 预留部分成功或租约残留 | Gang 无法同时启动、资源闲置 | 高 | PL-19；同成员完整 Node 组版本/租约与失败回滚、Janitor 清理 | 3 台 Node 只保护 2 台时不能宣布完整预留；失败后可按归属释放 | 跨 Node API 无原子提交，竞态保留 |
+| F03-16 | 宽泛 toleration 或直接 nodeName 绕过保护 | 队首保护失效、受保护卡被后继占用 | 严重 | PL-10/18/19；成员 admission 限制组授权，精确容忍并拒绝绕过 | 未授权的 Pod 不能绕过 group 保护；若无法验证应停止声称 Reserve 安全 | 节点已有 Pod 和其他调度器可能仍产生资源竞争 |
 
 **运行诊断与敏感信息处理**：诊断时先查看成员集群的 Ready 状态与 Karmada Binding/Work，再检查成员 Pod 事件和 Secret 引用。日志不得保存 Secret 数据。
 
@@ -2041,7 +2089,7 @@ F-01～F-06 的接口条件、调用主体和异常处理汇总如下。ARC、Ka
 | Controller/Listener 权限 | Controller 仍使用高权限 kubeconfig | ARC 目标版本所需最小 Kubernetes API 权限、Token 更新行为 |
 | JIT Secret 传播与回收 | Karmada `propagateDeps` | 引用识别范围、成员副本删除确认 |
 | NPU 成员准入 | Dispatcher 基于 Runner Service Profile（PL-D07）做完整工作负载成员容量判断，成员 Volcano 调度真实 Pod/PodGroup | Profile 发布、可信服务身份、设备拓扑与成员 Node/Gang 可行性及容量估计仍需接口确认 |
-| FIFO/Reserve Node/Backfill | Dispatcher Hold/Release 与容量账本 | 成员保护机制、队首安全回填、租约过期及清理规则 |
+| FIFO/Reserve Node/Backfill | Dispatcher Binding Hold/Release + 全 Node 保护；多 Pod/Gang 以同成员 Node 组授权租约，部分失败安全回滚 | 成员准入精确 Toleration、Node taint 绕过防护、完整 Group 预留回滚和保护开销计量需锁定接口；不能宣称卡级保护 |
 | 跨租户公平 | 按同资源族的卡时、权重仲裁 | 租户身份、权重、计量窗口和老化规则 |
 | PR/nightly 优先级 | nightly 实际 Pod/VolcanoJob 由工作流模板声明低优先级；hooks 自动创建 Pod 时由可信成员模板控制；成员 Volcano 排序 | 共享 Runner 静态模板不能自然区分任务类别；需核对 Pod/PodGroup 优先级、保留类使用权限及 Volcano Action 不抢占约束 |
 | Dispatcher 故障恢复 | 单 Writer、状态恢复及安全停止放行 | 互斥与旧 Writer 失效证明、恢复顺序及兼容机制 |
