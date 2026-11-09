@@ -6,6 +6,7 @@ of third-party API claims or deployed ARC/Karmada runtime behavior.
 from pathlib import Path
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,6 +140,41 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         for relative in paths:
             self.assertFalse(relative.startswith("http"))
             self.assertTrue((DOC.parent / relative).is_file(), relative)
+
+    def test_architecture_svgs_show_target_dispatcher_and_member_volcano(self):
+        figures = (
+            "federation-subsystem-goal-before-after.svg",
+            "overall-subsystem-architecture.svg",
+            "federation-layered-architecture.svg",
+            "arc-karmada-deployment-architecture.svg",
+        )
+        for filename in figures:
+            svg = DOC.parent / "images" / filename
+            root = ET.parse(svg).getroot()
+            label_text = " ".join((node.text or "") for node in root.iter())
+            self.assertIn("Dispatcher", label_text, filename)
+            self.assertIn("Volcano", label_text, filename)
+            self.assertNotIn("原型验证", label_text, filename)
+
+    def test_every_diagram_has_caption_below_and_next_line_explanation(self):
+        lines = self.design.splitlines()
+        image_lines = [i for i, line in enumerate(lines)
+                       if re.match(r"!\[[^]]+\]\(images/[^)]+\.svg\)", line)]
+        mermaid_ends = []
+        inside = False
+        for i, line in enumerate(lines):
+            if line == "```mermaid":
+                inside = True
+            elif inside and line == "```":
+                mermaid_ends.append(i)
+                inside = False
+        self.assertFalse(inside)
+        self.assertEqual(len(image_lines), 5)
+        self.assertGreaterEqual(len(mermaid_ends), 18)
+        for i in image_lines + mermaid_ends:
+            later = [line for line in lines[i + 1:] if line.strip()]
+            self.assertTrue(later[0].startswith('<p align="center">图 '), i)
+            self.assertTrue(later[1].startswith("说明："), i)
 
     def test_design_explains_scenario_without_process_commentary(self):
         # Protect the reader-facing design, not an author's review workflow.
