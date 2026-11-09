@@ -1058,6 +1058,7 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 | Job 排队耗时 | GitHub Job 可获得的 queued/start 时间及 attempt ID | GitHub 的队列包括匹配/容量影响；无法据此精确分解成 ARC 或 Karmada 内部时间 |
 | ARC 需求响应 | Listener 接收可识别的需求事件 → ERS 期望值变化 | 必须使用相同 Runner 服务及事件关联；异步事件丢失时标记未知 |
 | Dispatcher 持有时间 | Binding 首次进入 Dispatcher 队列 → Binding 成功放行 Cluster，以联邦控制面事件为准 | 与 GitHub Job queued→started 不同；记录资源族、租户、ProfileVersion、单/多 Pod 形态、Hold 原因及取消样本 |
+| Reserve Node 保护开销 | 成员 Node 保护租约有效期 → 释放，按被保护 Node 的完整可调度 NPU 容量记录保护卡时 | 保护卡时与真实 NPU Pod 运行卡时分别统计；多 Node Gang 须记录完整组/部分失败，防止把 Node Taint 当作 2/8 卡精确预留 |
 | 联邦成员放置与传播等待 | Dispatcher 放行 Binding → 目标成员 Runner Pod 出现，分段记录 Work 到达 | 无候选与策略 Hold 不等于 Work 已分发；跨控制面时钟未同步不计算精确差值 |
 | 节点资源等待与启动准备 | 成员真实 NPU Pod/PodGroup 创建 → PodGroup 可调度/PodScheduled → 容器 Ready | 多 Pod/Gang 未达 `minAvailable` 的等待要与单 Pod FailedScheduling 区分；镜像、Secret、设备初始化单独归因，Pod Ready 不是 GitHub Job 已开始 |
 | Runner 注册耗时 | Runner 启动/注册相关事件 → GitHub 确认 Runner 可用 | 需要可靠的关联 ID，未暴露事件不能凭推断填数 |
@@ -1089,7 +1090,7 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 |---|---|---|
 | Job 匹配与排队 | GitHub Job、Scale Set | 无匹配、无授权、容量限制、GitHub API 错误 |
 | Runner 需求/创建 | Listener、ERS/ER、ARC Controller 事件 | 需求未见、期望与实际数量差、Pod/JIT 创建失败 |
-| Dispatcher Hold 与联邦放置 | 队列时间/Policy、ResourceBinding/grant、Work | 无合格成员、Group Hold、ReserveForHead、CapacityUnknown、Backfill、放行冲突和成员同步失败 |
+| Dispatcher Hold 与联邦放置 | 队列时间/Policy、ResourceBinding/grant、Work、Node Taint/租约 | 无合格成员、Group Hold、ReserveForHead、ReservationPartial、容量未知、Backfill、放行冲突、保护开销及成员同步失败 |
 | 节点与依赖准备 | 成员 Node/Pod/PodGroup/Secret 事件 | ProfileUnknown、ResourceMismatch、Gang Unschedulable、FailedScheduling、FailedMount、ErrImagePull、设备资源不足 |
 | Runner 注册与执行 | ARC Runner 与 GitHub Job | 注册失败、Pod Ready 但 GitHub 未确认、Job 中断/完成 |
 | 状态与回收 | 成员 Pod.status、控制面聚合、Work/Finalizer | 状态缺失/过期/多来源冲突、删除未知或残留 |
