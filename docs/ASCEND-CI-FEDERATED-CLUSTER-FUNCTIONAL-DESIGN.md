@@ -44,7 +44,7 @@
 
 ![ARC + Karmada 联邦调度执行子系统整体架构](images/overall-subsystem-architecture.svg)
 
-包含 ARC、Karmada、成员 Kubernetes 和 Runner。灰框为边界；外部接口如下。
+目标系统包含 ARC、Dispatcher、Karmada、成员 Volcano/kube-scheduler 与实际 NPU Pod/PodGroup；外部接口如下。**Dispatcher 选成员，Karmada 分发，成员选择 NPU Node**。
 
 | 外部子系统 | 方向 | 交互内容 |
 |---|---|---|
@@ -245,19 +245,21 @@ vLLM 集群已无足够 NPU、vLLM-Omni 集群仍有空闲卡时，关键问题�
 
 ```mermaid
 flowchart LR
-  GH[GitHub Job] --> L[ARC Listener]
-  L --> ARC[ARC Controller / ERS]
-  ARC --> API[Karmada API]
-  API --> POLICY[成员选择与依赖传播]
-  POLICY --> M1[成员 Kubernetes 1]
-  POLICY --> M2[成员 Kubernetes 2]
-  M1 --> GH
-  M2 --> GH
-  M1 -.Pod status.-> API
-  M2 -.Pod status.-> API
+    GH[GitHub Job / runs-on] --> ARC[ARC Listener / Controller]
+    ARC --> K[Karmada API / Runner Binding]
+    K --> D[Dispatcher：容量与公平队列]
+    D --> K
+    K --> W[Karmada Work / JIT]
+    W --> M[成员 Kubernetes / Volcano]
+    M --> P[真实 NPU Pod / PodGroup]
+    P --> DP[kubelet / Device Plugin]
+    M -. 状态事件 .-> K
+    ARC -. Runner / Job 结果 .-> GH
 ```
 
-请求：GitHub → Listener → ARC → Karmada → 成员 Runner；反馈：Runner → GitHub，Pod.status → Karmada → ARC。状态与依赖契约见第 4 章。
+<p align="center">图 3-1 联邦 Runner 执行的端到端主路径</p>
+
+说明：Dispatcher 管理 Binding Hold/Release 和成员选择；Karmada 管理传播与状态；Volcano 负责成员 Node/Gang 调度；GitHub 独立管理 Job 结果。
 
 ## 3.4 组件与逻辑架构
 
@@ -271,11 +273,12 @@ flowchart LR
 |---|---|---|
 | ARC Listener | **统一任务入口**：让开发者使用同一个 Runner 标签提交任务，不必为不同成员集群选择专用标签。 | 对接 GitHub Actions 的任务需求，与 ARC Controller 协同完成按需 Runner 供给。 |
 | ARC Controller | **集中管理执行实例的生命周期**：使 Runner 的创建、扩缩与回收不再由每个执行集群各自管理。 | 承接 Listener 的需求变化，将 Runner 交给 Karmada 跨集群分发，并根据执行状态管理生命周期。 |
-| Karmada（复用的联邦子系统） | **打通相互隔离的执行资源池**：将多个成员集群纳入同一分发范围，使一个项目的任务可以使用其他合格成员的执行资源。 | 接收 ARC 产生的 Runner 对象，将其分发至成员 Kubernetes，并把执行状态返回给 ARC；不取代成员的节点级调度。 |
-| 成员 Kubernetes 与 Runner Pod | **提供实际、相互隔离的任务执行能力**：让集中管理的 Runner 在选中的成员集群使用当地计算资源执行 GitHub Job。 | 接收 Karmada 下发的 Runner 工作负载，使用成员原生调度与网络执行任务，并向控制面反馈状态。 |
+| Dispatcher（目标联邦调度者） | **减少资源错配和任务等待**：根据可信 NPU Profile、容量事实、FIFO/公平及 Reserve/Backfill 管理待放行 Runner Binding。 | 只决定可授权的目标成员和放行时机；向 Karmada 写放置决定，不设置成员 NPU Pod 的 Node。 |
+| Karmada（复用的联邦子系统） | **实现跨成员资源对象传播与状态协调**：通过 Binding/Work、传播策略和资源解释器连接成员。 | 复用成员资格、Runner/JIT 传播及状态回传；对同一 Binding 不与 Dispatcher 重复决定目标成员。 |
+| 成员 Kubernetes / Volcano 与 NPU Pod | **实际节点放置和设备执行**：支持单 Pod 以及多 Pod/Gang 的 NPU 资源与拓扑调度。 | 在成员 API 接收 Runner/Job Pod，Volcano 选择 NPU Node 或 PodGroup，kubelet/Device Plugin 分配设备；回传实际执行事实。 |
 | ARC–Karmada 集成适配（本系统设计） | **消除两套上游系统之间的语义与环境差异**：保障跨控制面访问、临时注册凭证可用、Runner 就绪状态可被正确识别。 | 在 ARC、Karmada 与成员 Kubernetes 之间补齐通信鉴权、依赖传播和状态聚合约束，使上述管理、分发、执行链路闭环。 |
 
-**边界：** GitHub 提供任务；ARC/Karmada/Kubernetes 为复用组件。`karmada-search` 不在范围内，NPU 插件属成员依赖。不承诺均匀分配或固定收益。
+**边界：** GitHub 提供 Job 与执行结果；ARC 管理 Runner；Dispatcher 提供联邦选择与排队策略；Karmada 传播 Runner/JIT；成员 Volcano 选择 Node，不把整组 36 卡请求强加给单 Node。`karmada-search` 不在范围内。
 
 部署关系见 3.6；资源、状态与接口契约见 3.5、4.4～4.6 和第 5 章。
 
@@ -372,10 +375,11 @@ erDiagram
 
 | 部署域 | 构件 | 运行接口 | 设计约束 |
 |---|---|---|---|
-| ARC 管理域 | 官方 ARC Controller | GitHub API、统一 Karmada API | 可以是管理 Kubernetes/容器部署；不要求在每个成员单独部署 |
-| Karmada 控制面 | API、Policy/Scheduler、状态解释扩展 | 多成员 Kubernetes API | API、证书、网络、成员资格、可用性由部署管理提供 |
+| ARC 管理域 | 官方 ARC Controller、Listener（位置可配置） | GitHub API、统一 Karmada API | 负责 Runner 供给与回收，不控制成员 NPU Node |
+| 联邦调度域 | **Dispatcher**、容量账本与预留协调 | Runner Binding、成员容量/Profile、Node 保护租约 | 唯一 Binding 写者；负责 Hold/Release 和选择成员；故障时安全对账与接管 |
+| Karmada 控制面 | API、Policy/Binding/Work、状态解释扩展 | 多成员 Kubernetes API | 负责资源对象传播及状态，不替代 Dispatcher 对目标 Runner Binding 的成员选择 |
 | Listener 成员域 | Listener Pod、独立控制面身份 | GitHub Actions、Karmada HTTPS API | 示例固定在 member1；目标成员是可配置的 Placement |
-| Runner 执行域 | Runner Pod、JIT Secret、Runner SA、可选 NPU 资源 | GitHub Actions、成员 kubelet/Runtime | 只允许在满足资源、镜像和安全约束的成员运行 |
+| Runner 与 NPU 执行域 | Runner Pod、JIT Secret、真实 NPU Pod/PodGroup、Volcano、Device Plugin | GitHub Actions、成员 API/kubelet/Runtime | 单 Pod 检查单 Node；多 Pod 按同成员 Gang/拓扑调度，真实 NPU 资源请求与 Profile 对账 |
 | 平台外 | 镜像仓库、身份/密钥服务、运维/观测 | 拉取、认证、日志/指标 | 不要求跨成员 Pod 网络直连 |
 
 **配置输入清单（P）**：`runnerScaleSetName` / `runs-on`、GitHub URL、Runner 镜像/digest、控制面 API DNS/IP/port/SAN、CA、Token audience/TTL、目标成员集合、调度权重、Namespace、NPU 资源名、节点标签、业务 SLO。当前 Manifest 的 `karmada-runner`、`member1/member2`、`172.22.0.4:32443` 是示例值，后两者不应硬编码到通用部署工具。
