@@ -190,7 +190,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             "同一 Runner Service 在某一 Profile 版本的生效范围内只接纳一种完整的 NPU 资源规格",
             "不同规格应由不同的可信 Runner Service/Profile 承载",
             "默认 ARC 扩容事件不提供可信的逐 Job 需求",
-            "可信的 Job→Runner/Binding 关联",
+            "唯一 Job→Runner/Binding 关联",
             "ProfileUnknown",
             "放行前的正确性约束",
         ):
