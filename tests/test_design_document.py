@@ -34,10 +34,11 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertIn("FMEA", block)
 
     def test_story_and_requirement_coverage(self):
-        for n in range(1, 9):
+        for n in range(1, 10):
             self.assertIn(f"US-{n:02d}", self.design)
         for sr in ("SR-01-01", "SR-01-02", "SR-02-01", "SR-02-02",
-                   "SR-03-01", "SR-03-02", "SR-04-01", "SR-05-01", "SR-06-01"):
+                   "SR-03-01", "SR-03-02", "SR-04-01", "SR-05-01",
+                   "SR-06-01", "SR-06-02", "SR-06-03"):
             self.assertIn(sr, self.design)
         self.assertGreaterEqual(self.design.count("sequenceDiagram"), 8)
 
@@ -49,7 +50,8 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         nfr_ids = re.findall(r"(?m)^\| \*\*(SR-NF-\d\d)\*\* \|", nonfunctional)
         self.assertEqual(function_ids, [
             "SR-01-01", "SR-02-01", "SR-03-01", "SR-03-02",
-            "SR-04-01", "SR-05-01", "SR-02-02"
+            "SR-04-01", "SR-05-01", "SR-02-02",
+            "SR-06-01", "SR-06-02", "SR-06-03"
         ])
         self.assertEqual(nfr_ids, [
             "SR-NF-01", "SR-NF-02", "SR-NF-03", "SR-NF-04",
@@ -64,18 +66,20 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertNotIn(implementation_detail, functional)
         for code in nfr_ids:
             self.assertIn(code, self.design.split("### 5.8.2 ", 1)[1])
-        self.assertNotIn("| **SR-06-01** |", functional)
+        self.assertIn("| **SR-06-01** |", functional)
+        self.assertIn("| **SR-06-02** |", functional)
+        self.assertIn("| **SR-06-03** |", functional)
         self.assertNotIn("| **SR-01-02** |", functional)
         self.assertNotIn("| **SR-NF-07** |", nonfunctional)
         self.assertNotIn("| **SR-NF-09** |", nonfunctional)
         self.assertIn("未确定", section)
         self.assertIn("P-SR-04", section)
-        for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
+        for feature in ("FT-01", "FT-02", "FT-03", "FT-04", "FT-05"):
             self.assertIn(feature, self.design)
 
     def test_federated_features_remain_reader_facing(self):
         overview = self.design.split("## 2.2 核心特性", 1)[1].split("## 2.3 ", 1)[0]
-        for feature in ("FT-01", "FT-02", "FT-03", "FT-04"):
+        for feature in ("FT-01", "FT-02", "FT-03", "FT-04", "FT-05"):
             self.assertIn(feature, overview)
         for concept in ("统一入口与资源共享", "可控成员放置",
                         "跨控制面执行", "临时资源回收"):
@@ -84,7 +88,28 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
                                         "当前仓库的依据", "实现状态边界", "代码依据"):
             self.assertNotIn(implementation_evidence, overview)
         self.assertIn("统一入口 → 成员选择 → 跨集群执行与状态反馈 → 资源回收", overview)
-        self.assertIn("**扩展候选：原 SR-06-01，当前非正式 SR**", self.design)
+        self.assertIn("FT-05：SR-06-01～03", self.design)
+        self.assertIn("PL-D07", self.design)
+        self.assertIn("UC-14", self.design)
+
+    def test_npu_is_a_core_requirement_with_profile_and_gang(self):
+        overview = self.design.split("## 2.2 核心特性", 1)[1].split("## 2.3 ", 1)[0]
+        self.assertIn("FT-05", overview)
+        self.assertIn("Runner Service Resource Profile", self.design)
+        self.assertIn("multi-pod-group", self.design)
+        self.assertIn("PodGroup", self.design)
+        self.assertIn("ProfileUnknown", self.design)
+        self.assertIn("ResourceMismatch", self.design)
+        self.assertIn("SR-06-01～03", self.design)
+        self.assertNotIn("NPU 专项适配为后续扩展", self.design)
+        self.assertNotIn("非本期正式 SR", self.design)
+
+    def test_mermaid_diagrams_have_balanced_fences(self):
+        self.assertNotIn("§§§", self.design)
+        lines = self.design.splitlines()
+        fences = [line for line in lines if line.strip().startswith("```")]
+        self.assertEqual(len(fences) % 2, 0)
+        self.assertGreaterEqual(self.design.count("```mermaid"), 15)
 
     def test_six_column_implementation_interface_tables(self):
         for n in range(1, 7):
