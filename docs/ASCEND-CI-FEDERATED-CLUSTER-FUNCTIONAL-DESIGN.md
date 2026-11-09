@@ -1,33 +1,30 @@
 # 昇腾CI 联邦集群功能设计文档
 
-> 文档标识：ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN
-> 状态：统一设计正文（基于现有资料整理；新增决定与待选参数显式标记）
-> 目录依据：用户提供的功能域设计模板：第 1 章保留已有内容；第 2 章概述；第 3 章总体方案；第 4 章领域规格；第 5 章功能实现
-> **设计证明依据：** 官方 ARC/GitHub Actions、Karmada、Kubernetes 技术文档、当前仓库的 Manifest 与清晰的项目设计决策。**文档完成不要求 PoC、Kind、真实 Runner 或硬件实验**。
-
-**阅读原则**：**U** = 上游文档明确支持的机制；**D** = 昇腾CI针对组件组合定义的集成设计决策；**P** = 实施/厂商选型待定的参数。当前仓库 Manifest 是参考配置，不等于上游产品承诺；“设计完成”也不等于“已部署运行”。
-
-**设计基线与证据优先级**：本文件是 ARC + Karmada 联邦 Runner 执行功能域的**功能设计**，不是未来昇腾CI整体架构说明书，也不是部署/交付计划。设计首先核对仓库 `manifests/01-karmada-interpreter.yaml`、`02-propagation-policies.yaml`、`03-rbac.yaml`、`04-autoscalingrunnerset.yaml` 的**当前配置事实**；上游功能语义以与目标版本匹配的官方文档、CRD/API 契约为依据；组合行为如无法从两者推出，须作为 **D 类待验证集成约束** 而非已经获得保证的能力。目标设计与 Manifest 不同时明确标注差距，不通过修改 Manifest、编写部署命令或要求 PoC 来宣称闭环。
-
-**设计层次**：第 2 章定义功能需求及用例，第 3 章定义系统总体方案与职责，第 4 章定义跨功能域约束，第 5 章定义功能单元的交互、接口与 DFX。时序图表达设计交互而非实测调用轨迹；不凭抽象交互图推断上游控制器拥有某个 API 或自动恢复能力。
-
 # 1 功能域背景与目的
 
 ## 1.1 目标与职责
 
-将项目独占集群纳入 Karmada，统一管理 Runner 供给、分发和回收。
+**业务场景。** vLLM 社区在 PR 高峰期每天可能提交超过 50 个 PR，单个 PR 的 CI 验证平均需要约 36 张 NPU 卡。当多个 PR 并发运行时，分配给 vLLM 的集群容量不足，任务持续排队。与此同时，分配给 vLLM-Omni 的集群可能还有满足运行条件的空闲 NPU。上述 PR 数量和卡数用于说明业务负载，不代表全平台容量统计或性能承诺。
 
-| 职责 | 实现主体 | 边界 |
+**现有问题。** 当前 CI 平台按项目配置相互独立的集群。即使 vLLM-Omni 集群存在空闲资源，vLLM 的任务也只能等待本集群释放 NPU。平台缺少统一的跨集群容量管理和 Runner 放置机制，形成“一个项目排队、另一个项目资源闲置”的矛盾。要求开发者自行切换 `runs-on` 标签、选择目标集群或维护多个工作流，会把内部资源管理复杂度转嫁给社区。
+
+**设计目标。** 开发者继续使用统一的 GitHub Actions Runner 标签提交任务，无须感知底层集群。平台在授权范围内利用其他项目集群的合格空闲资源，并在容量不足时进行统一等待与安全回填；资源就绪后由选定成员执行 Runner Pod，执行状态正常返回 ARC 和 GitHub。目标是减少由集群隔离导致的无效等待，提高多集群资源利用效率，同时防止大任务因容量碎片持续饥饿。
+
+**总体方案。** ARC 负责 Runner 需求与生命周期；Karmada 负责资源传播和成员对象管理；目标 Dispatcher 负责跨成员容量准入、FIFO、Reserve Node、安全 Backfill 与租户公平；成员 Kubernetes/Volcano 负责节点与 NPU 资源调度。现有 Manifest 尚未配置 Dispatcher，相关能力属于目标架构。
+
+| 职责 | 责任组件 | 主要输入与输出 |
 |---|---|---|
-| 任务匹配与 Runner 生命周期 | ARC Listener、Controller、Scale Set | GitHub Actions 提供队列；ARC 调整 Runner 数量 |
-| 资源对象传播与成员选择 | Karmada Policy、Detector、Binding/Execution Controller；目标 Dispatcher | Dispatcher 选择成员并决定放行时机，Karmada 分发；不承担 NPU Pod 节点级调度 |
-| 资源实际执行 | 成员 Kubernetes、kube-scheduler、kubelet | 创建 Runner Pod；可在 NPU 节点执行有设备请求的工作负载 |
-| 状态与凭证适配 | ResourceInterpreterCustomization、Listener Token / RBAC、propagateDeps | 保留 ARC 所需的 Pod 状态和 JIT Secret |
-| 设计契约与治理 | 本子系统接口适配、策略、身份与状态约束 | 由本项目负责架构决策；不代替上游内部实现 |
+| GitHub Job 匹配、Runner 供给与回收 | GitHub Actions、ARC Listener/Controller/Scale Set | `runs-on`、Job 需求 → 临时 Runner、注册状态、生命周期 |
+| 跨成员容量准入、公平排队与成员选择 | Dispatcher、Karmada | 成员资格、容量事实、排队顺序 → 目标成员、放行决定 |
+| 对象传播与跨控制面协调 | Karmada Binding/Work 与相关控制器 | Runner Pod、JIT Secret → 成员对象及传播状态 |
+| 节点/NPU 资源调度 | 成员 Kubernetes、Volcano、kubelet | Pod 资源请求、节点容量、优先级 → 节点绑定、执行 |
+| 身份、状态与诊断 | ARC/Karmada 集成配置及状态解释器 | 受限访问身份、Pod 状态 → Runner 可用性与故障归因 |
+
+**关键约束。** 共享仅发生在授权成员及符合 NPU 规格、网络、拓扑与运行环境的资源之间。单 Pod 要求一个节点完整可放置；多 Pod/Gang 任务要求同一成员内整组可放置，成员总空闲卡数不能代替拓扑可行性判断；正在执行的 GitHub Job 不因成员失联而自动获得无损迁移保证。
 
 ## 1.2 边界
 
-**边界内（设计协作范围）：** 统一 Runner 入口、跨成员资源调度、容量不足时的等待与诊断、Runner 供给和回收；ARC Controller/Listener/Scale Set、Karmada 控制面及成员 Kubernetes 为复用组件。本设计负责成员候选、资源请求、状态回传及必要的跨控制面访问契约，不重写上游排队和节点调度算法。NPU 设备规格仅作为调度约束扩展。
+**包含：** 统一 Runner 入口、成员选择、容量准入与排队、Runner 供给与回收，以及跨控制面的状态、凭证、资源传播。复用 ARC、Karmada 和成员 Kubernetes；Dispatcher 承担联邦容量与公平决策。NPU 设备规格与节点拓扑属于资源准入约束。
 
 **边界外：** GitHub Actions 队列算法及 Job 结果管理、业务工作负载、镜像仓库、现有监控系统和工作负载执行环境的安全选型。
 
@@ -37,17 +34,25 @@
 
 ![资源无法互用、资源利用不均衡与任务排队过长：联邦执行前后对比](images/federation-subsystem-goal-before-after.svg)
 
+<p align="center">图 1-1 集群隔离与联邦资源共享的业务对比</p>
+
+说明：目标利用授权成员的合格 NPU 空闲资源减少不必要的任务等待。
+
 **现状：** 集群按项目独占，空闲容量无法共享，任务排队。
 
 **目标：** ARC 统一供给 Runner，Dispatcher 在 Karmada 控制面按授权、容量及 FIFO/Reserve Node/Backfill 决定何时放行并选择成员，成员 Kubernetes 完成 NPU 节点调度。资源共享减少因集群割裂造成的等待；租户公平权重与等待目标仍需批准；PR/nightly 的成员调度顺序见 PL-D05。
 
-**边界：** 图为目标示意，不承诺利用率或排队收益；容量、兼容性和 NPU 驱动由部署提供。
+**资源条件：** 借用集群必须具备授权、可用容量以及兼容的 NPU、运行时和网络环境；吞吐与排队收益取决于实际负载和资源分布。
 
 ## 1.4 整体架构
 
 ![ARC + Karmada 联邦调度执行子系统整体架构](images/overall-subsystem-architecture.svg)
 
-包含 ARC、Karmada、成员 Kubernetes 和 Runner。灰框为边界；外部接口如下。
+<p align="center">图 1-2 联邦 Runner 执行子系统整体架构</p>
+
+说明：Dispatcher 选择成员、Karmada 分发、成员 Volcano 为实际 NPU Pod 选择节点。
+
+目标系统包含 ARC、Dispatcher、Karmada、成员 Volcano/kube-scheduler 与实际 NPU Pod/PodGroup；外部接口如下。**Dispatcher 选成员，Karmada 分发，成员选择 NPU Node**。
 
 | 外部子系统 | 方向 | 交互内容 |
 |---|---|---|
@@ -74,41 +79,41 @@
 
 ## 2.1 定位、使用者和边界
 
-开发者只选择 Runner 服务；ARC 按需供给，Karmada 选择执行成员。**GitHub 负责 Job 排队，ARC 负责 Runner 供给，Karmada 负责成员放置，成员 kube-scheduler 负责节点资源不足时的 Pending。** 本方案通过跨成员资源共享与放置减少不必要的等待，不实现新的 GitHub 队列或 FIFO 算法。
+在 vLLM 专属集群不足、vLLM-Omni 集群存在合格空闲卡时，开发者仍提交原有 `runs-on`。GitHub 负责 Job 匹配，ARC 按需创建 Runner；Dispatcher 根据跨成员容量、FIFO 与 Reserve Node 决定放行及目标成员，Karmada 分发对象，成员调度器为 Runner Pod 选择节点。GitHub Job 队列不由 Dispatcher 接管；Dispatcher 管理的是联邦资源放置前的等待与准入。
 
 **参与者**：开发者、平台工程师、资源池管理员、安全管理员、运维人员。**外部依赖**：GitHub Actions、镜像仓库、密钥服务、部署与观测平台。
 
 ## 2.2 核心特性
 
-目标：**统一 Runner 服务，跨成员共享资源；执行成员由平台选定。**
+核心能力是让开发者使用统一 Runner 服务，并将合格的空闲资源从按项目隔离的集群中释放出来供授权任务使用。
 
-**FT-01 统一入口与资源共享。** 开发者只选 Runner 服务，不指定成员。作业可使用授权成员的空闲容量。
+**FT-01 统一入口与资源共享。** vLLM 开发者保留原有工作流标签；Runner 可在授权的 vLLM-Omni 等成员集群运行，开发者无须选择集群。
 
-**FT-02 可控成员放置。** 平台配置授权候选成员，Karmada 选择执行成员，成员 Kubernetes 选择节点。成员或节点资源不足时保留未就绪及等待原因；工作流标签不变。
+**FT-02 可控成员放置与公平等待。** 当 36 卡任务无法在任何合格成员上放置时，Dispatcher 保留队首容量并允许不破坏该预留的回填任务；资源可用后选择授权成员，成员 Kubernetes 负责节点调度。
 
-**FT-03 跨控制面执行。** 保障 Listener 访问、临时凭证下发和状态反馈；未就绪 Runner 不得接收作业。
+**FT-03 跨控制面执行。** 被放置到其他成员的 Runner 必须获得对应 JIT 注册信息，且 Listener 能访问 Karmada API、运行状态能反馈给 ARC；未就绪 Runner 不应报告为可执行。
 
-**FT-04 临时资源回收。** 按作业需求创建 Runner，作业结束后回收临时资源。
+**FT-04 临时资源回收。** PR 检查结束后回收临时 Runner、传播对象与敏感依赖，使释放的 NPU 容量可供后续任务使用。
 
 **执行链路：统一入口 → 成员选择 → 跨集群执行与状态反馈 → 资源回收。**
 
-NPU 专项适配为后续扩展，不单列核心特性。
+**FT-05 NPU 工作负载容量准入与成员内调度。** 平台在 Runner 放行前取得可信的 NPU 资源规格，识别单 Pod 或多 Pod 协同任务，筛选能够容纳完整需求的成员；成员 Volcano 负责实际 NPU 节点选择及需要时的 Gang 调度。设备插件提供真实扩展资源，容量不满足时不得将零散卡数拼接成虚假可用容量。
 
 ## 2.3 需求与用例追踪
 
-依据第 1.3 节的问题和第 3.2 节的选型提取需求。下列编号仅为本设计的内部追踪标识，**不是业务方已批准的外部需求编号**；未提供正式需求基线的部分不得声称已完成需求验收。
+需求从统一 Runner 入口、跨集群容量共享、公平等待、执行状态反馈及资源回收等业务场景分解。以下编号用于需求到组件、接口和故障处理的追踪；业务需求正式编号尚未提供。
 
-| 编号 | 定义与粒度 | 本文用法 |
+| 编号 | 定义与粒度 | 使用范围 |
 |---|---|---|
 | **IR** | 功能级需求：描述平台必须提供的独立业务能力 | IR-01～IR-04 为能力需求；与 F 功能实现单元可多对多关联，不把上游组件直接当作 IR |
 | **FT** | 功能域特性：对外可感知的能力归类 | FT-01～FT-04 组织 IR 和 SR，不替代需求验收 |
 | **SR** | 场景级需求：描述某一条件下必须实现的行为与验收依据 | SR-xx-xx 和 SR-NF-xx；一个 IR 可关联多个 SR |
 | **UC** | 用例：具有参与者、前置条件、主/异常路径的行为场景 | UC-01～UC-13；一个 SR 可由多个 UC 展示 |
-| **F** | 功能实现单元：第 5 章可独立评审的设计职责 | F-01～F-05 为本期核心设计单元；F-06 为扩展，不等同正式 IR |
-| **AR** | 迭代实现/合入单元：由已批准 SR 分解得到的最小实现变更 | 当前未分配 AR 编号、未定义实现批次；不虚构 AR 或将上游资源对象称为 AR |
+| **F** | 功能实现单元：第 5 章可独立评审的设计职责 | F-01～F-06 均为功能设计单元，F-06 对应 NPU 容量与调度核心需求 |
+| **AR** | 迭代实现/合入单元：由已批准 SR 分解得到的最小实现变更 | 尚未分配编号 |
 | **SP** | 跨功能域设计规格：多个 F 共同遵守的行为/接口约束 | SP-01～SP-09 在第 4 章定义，供第 5 章引用 |
 
-**追踪原则**：IR → SR → UC/F → SP/接口/DFX；在进入迭代实施时再建立 SR → AR → 代码/合入单元映射。本文件只完成设计追踪，不作交付状态声明。
+**追踪关系：** IR → SR → UC/F → SP/接口/DFX；AR 在迭代分解时关联 SR。
 
 | 需求意图 | 核心场景 | SR | 特性与功能 |
 |---|---|---|---|
@@ -116,16 +121,21 @@ NPU 专项适配为后续扩展，不单列核心特性。
 | IR-02 可控成员放置 | UC-05 成员选择；UC-10 无合格成员 | SR-03-01 | FT-02；F-03 |
 | IR-03 跨控制面执行 | UC-06 凭证未就绪；UC-08 访问控制；UC-09 状态反馈 | SR-03-02、SR-04-01、SR-05-01 | FT-03；F-03～F-05 |
 | IR-04 临时资源回收 | UC-04 作业结束；UC-12 状态或清理异常 | SR-02-02 | FT-04；F-02、F-03、F-05 |
+| IR-05 NPU 资源容量准入 | UC-07 NPU 节点执行；UC-13 NPU 容量不足；UC-14 多节点协同任务 | SR-06-01～03 | FT-05；F-03、F-06 |
 
 **用例概览：**
 
 ![昇腾CI 联邦集群功能域概要用例视图——业务角色与主要用例关系](images/federated-cluster-use-case-overview.svg)
 
-> 图示角色与用例关系，不代表执行顺序。NPU 属后续扩展；Pod、Secret 与状态处理见第 5 章。
+<p align="center">图 2-1 联邦 Runner 执行功能域主要用例</p>
+
+说明：用例涵盖统一入口、跨成员执行与回收；NPU 资源准入和 Gang 由 UC-07/13/14 细化。
+
+> 图示为既有用例概要，NPU 资源准入与多节点协同任务已纳入 FT-05，分别由 UC-07/13/14 细化；Pod、Secret 与状态处理见第 5 章。
 
 ## 2.4 需求 SR
 
-只规定联邦调度的**场景、行为、验收条件**。实现字段与控制器交互见第 4、5 章。中文表述借鉴 [ASD-STE100](https://www.asd-ste100.org/about_STE.html) 的术语一致和避免歧义原则，不声称符合该英语标准。
+以下需求定义具体触发场景、系统预期行为和可观察的判定结果；对应组件及接口见第 4、5 章。
 
 ### 2.4.1 功能需求
 
@@ -138,8 +148,11 @@ NPU 专项适配为后续扩展，不单列核心特性。
 | **SR-04-01** | 成员中的 Listener 访问统一控制面。 | 凭有效身份处理所属任务；连接或授权失败不得报成功。 | 可正常更新所属 Runner 服务；错误类别可区分。 | FT-03；已配置 Token/CA/RBAC，轮换未实现 |
 | **SR-05-01** | 成员 Runner 启动、就绪或异常。 | 将真实状态反馈到管理面；未就绪不得判为就绪。 | 管理面与成员状态一致，保留关键状态字段。 | FT-03；单成员状态解释 |
 | **SR-02-02** | 作业结束。 | 回收临时执行资源；失败时保留残留对象及错误。 | 资源进入回收流程；可定位异常残留。 | FT-04；复用 ARC/Karmada |
+| **SR-06-01** | 一个需要 NPU 的 Runner 请求进入联邦排队，真实 NPU Pod 尚未创建。 | 依据已声明且可验证的 Runner Service Resource Profile 进行成员容量准入；缺失或冲突时不把 CPU Runner 请求当作 NPU 需求，也不宣称已完成容量保留。 | 能从服务标识追踪资源规格版本、Binding 授予及目标成员；未知需求不按零卡放行。 | IR-05/FT-05；F-03/F-06；PL-D07 |
+| **SR-06-02** | NPU 工作负载为单 Pod 或同成员多个 Pod 的协同任务。 | 单 Pod 必须能由成员内一个 Node 完整容纳；多 Pod 任务必须在同一个授权成员满足各 Pod 的节点约束和最小同时运行数量，成员 Volcano 负责真实节点选择及 Gang。 | 8 卡节点不能承载单 Pod 16 卡请求；若 36 卡由多 Pod 组成，则按完整 PodGroup 需求判断成员可行性。 | IR-05/FT-05；UC-07/14；F-06 |
+| **SR-06-03** | Dispatcher 预估的需求与实际 NPU Pod/PodGroup 请求不同，或资源/拓扑容量不可确认。 | 保留差异及容量状态，阻止将错误的资源保留视为成功；按已定义的回收/重新准入路径处理，不能自行复制 GitHub Job 或放宽设备请求。 | 显示 Profile 与实际 Pod 需求差异、资源授予和对账结果；容量未知与不足可区分。 | IR-05/FT-05；UC-13；F-03/F-06 |
 
-原 SR-01-02 属 GitHub 原生匹配异常；原 SR-06-01 属 NPU 扩展设计，均不列为当前核心 SR。
+SR-01-02 属 GitHub 原生匹配异常，不列为核心 SR。SR-06-01～03 是本功能域的 NPU 核心场景需求，仍需按正式业务需求基线确认指标与资源规格。
 
 ### 2.4.2 非功能需求
 
@@ -172,34 +185,34 @@ NPU 专项适配为后续扩展，不单列核心特性。
 | FT-02 可控成员放置 | SR-03-01 | SR-NF-03、SR-NF-08 | F-03 |
 | FT-03 跨控制面执行 | SR-03-02、SR-04-01、SR-05-01 | SR-NF-01、SR-NF-02、SR-NF-04 | F-03～F-05 |
 | FT-04 临时资源回收 | SR-02-02 | SR-NF-04、SR-NF-06 | F-02、F-03、F-05 |
+| FT-05 NPU 准入与成员调度 | SR-06-01～03 | SR-NF-03～05、SR-NF-08 | F-03、F-06 |
 
-**范围**：Manifest 证明现有配置；上游定义组件行为；未实现的目标要求仍须实施，不能标为已交付。
+**现状差距：** 现有 Manifest 尚未包含 Dispatcher、跨租户公平及容量预留，相关设计要求见第 4.3 节。
 
 ## 2.5 非目标
-
-**阶段边界**：本文件只评审功能设计的正确性、完整性与可追踪性；不要求代码开发、部署脚本、硬件实验、验收测试执行或运维交付报告。没有 PoC 本身不构成设计缺陷，缺少必要的接口语义、状态约束或 DFX 设计则仍属于文档缺陷。
 
 - 不重建 GitHub Job 匹配、队列排序和结果存储；UC-02 仍保留异常说明。
 - 不涉及 Runner 沙箱、虚拟机、工作负载强隔离或云平台安全选型；必要的联邦 API 鉴权、凭证传播与放置权限仍属集成契约。
 - ARC/Karmada 内部实现见第 4、5 章，不另列核心 SR。
-- NPU 设备适配保留为 F-06/US-08 扩展，当前未实现。
+- 本方案不开发 NPU Device Plugin、硬件驱动或跨成员多 Pod Gang；NPU 资源规格、成员容量准入与成员内调度接口属于 F-06 正式范围。
 - 不承诺运行中 Job 无损迁移或独立 Runner 逐轮均衡分配。
 - 企业级可用性、通用升级、成本预算和监控产品选型不另列核心 SR。
-- 只修订设计，不变更 Manifest；文档完成不要求 PoC。
 
 # 3 功能域总体方案
 
 ## 3.1 设计原则
 
-**职责及事实来源约束**：GitHub Actions 是 Job 匹配、队列与结果的权威系统；ARC 是 Runner Scale Set、EphemeralRunner 与 Runner 生命周期的管理主体；Karmada 是成员选择、对象传播与联邦对象状态协调主体；成员 Kubernetes/kubelet 是节点放置、Pod 实际运行状态与设备分配事实的来源。各组件的 CRD、对象所有权与事件先后以目标版本实际契约为准；本项目只规定集成边界，不重新实现 GitHub 队列、ARC 生命周期、Karmada Scheduler 或 kube-scheduler。跨系统出现状态分歧时不得用 Pod Ready 推导 Job 成功，具体冲突判定与恢复规则属于后续 T2/T3 设计任务。
+**状态权威：** GitHub 管理 Job 队列和执行结果；ARC 管理 Runner 生命周期；Dispatcher 管理联邦放行与容量保护决定；Karmada 管理资源传播及成员对象；成员 Kubernetes 管理节点放置和 Pod 运行状态。发生状态分歧时保留各源事实，Pod Ready 不能推导 Job 成功。详见第 4.5 节。
 
-1. **职责分离**：GitHub 负责队列，ARC 负责 Runner 期望量与短生命周期，Karmada 负责成员选择和对象传播，成员 Kubernetes 负责节点调度与设备资源分配。
+1. **职责分离**：GitHub 负责 Job 队列；ARC 负责 Runner 生命周期；**Dispatcher 负责成员容量准入与成员选择**；Karmada 负责 Binding/Work 及对象传播；成员 Volcano/kube-scheduler 负责 NPU 节点或 PodGroup/Gang 调度，kubelet/Device Plugin 负责设备分配。
 2. **控制面与执行面分离**：Runner 管理请求汇入统一 API；Listener 和 Runner 可以部署于执行域，但其权限、连接地址和证书与目标 API 一致。
 3. **最小权限与最小传播**：GitHub 主凭证以管理域为中心，JIT 凭证按具体引用传播至执行成员；Runner 默认不获取 Kubernetes 管控 API Token。
 4. **最终一致与无重放假设**：跨组件 Pod/Secret/Binding 传播与清理都是异步流程；没有上游证明不得承诺原子传播、无损迁移或 Job exactly-once 重试。
 5. **上游优先**：默认复用 ARC、Karmada、Kubernetes 的正式 API/控制器；本功能域仅增加集成策略、必要权限、状态解释及配置，不重复设计上游模块。
 
 ## 3.2 备选方案与最终选型
+
+vLLM 集群已无足够 NPU、vLLM-Omni 集群仍有空闲卡时，关键问题不是如何让两个集群都运行 Runner，而是**谁根据授权和容量决定具体使用哪个集群**。不同方案的差异主要在于调度权归属及集群间资源能否统一管理。
 
 | 选型 | 方案结构 | 主要优点 | 主要限制 |
 |---|---|---|---|
@@ -244,19 +257,21 @@ NPU 专项适配为后续扩展，不单列核心特性。
 
 ```mermaid
 flowchart LR
-  GH[GitHub Job] --> L[ARC Listener]
-  L --> ARC[ARC Controller / ERS]
-  ARC --> API[Karmada API]
-  API --> POLICY[成员选择与依赖传播]
-  POLICY --> M1[成员 Kubernetes 1]
-  POLICY --> M2[成员 Kubernetes 2]
-  M1 --> GH
-  M2 --> GH
-  M1 -.Pod status.-> API
-  M2 -.Pod status.-> API
+    GH[GitHub Job / runs-on] --> ARC[ARC Listener / Controller]
+    ARC --> K[Karmada API / Runner Binding]
+    K --> D[Dispatcher：容量与公平队列]
+    D --> K
+    K --> W[Karmada Work / JIT]
+    W --> M[成员 Kubernetes / Volcano]
+    M --> P[真实 NPU Pod / PodGroup]
+    P --> DP[kubelet / Device Plugin]
+    M -. 状态事件 .-> K
+    ARC -. Runner / Job 结果 .-> GH
 ```
 
-请求：GitHub → Listener → ARC → Karmada → 成员 Runner；反馈：Runner → GitHub，Pod.status → Karmada → ARC。状态与依赖契约见第 4 章。
+<p align="center">图 3-1 联邦 Runner 执行的端到端主路径</p>
+
+说明：Dispatcher 管理 Binding Hold/Release 和成员选择；Karmada 管理传播与状态；Volcano 负责成员 Node/Gang 调度；GitHub 独立管理 Job 结果。
 
 ## 3.4 组件与逻辑架构
 
@@ -264,17 +279,22 @@ flowchart LR
 
 ![联邦调度执行系统逻辑架构](images/federation-layered-architecture.svg)
 
+<p align="center">图 3-4 联邦调度执行子系统的目标分层架构</p>
+
+说明：跨成员资源控制与成员 Node/Gang 调度分别由 Dispatcher 和 Volcano 负责。
+
 **问题：** 项目与集群绑定，空闲容量难共享、任务排队。**方案：** ARC 统一供给，Karmada 分发，成员 Kubernetes 执行。
 
 | 架构构件 | 主要解决的问题 / 架构职责 | 与其他构件的协作关系 |
 |---|---|---|
 | ARC Listener | **统一任务入口**：让开发者使用同一个 Runner 标签提交任务，不必为不同成员集群选择专用标签。 | 对接 GitHub Actions 的任务需求，与 ARC Controller 协同完成按需 Runner 供给。 |
 | ARC Controller | **集中管理执行实例的生命周期**：使 Runner 的创建、扩缩与回收不再由每个执行集群各自管理。 | 承接 Listener 的需求变化，将 Runner 交给 Karmada 跨集群分发，并根据执行状态管理生命周期。 |
-| Karmada（复用的联邦子系统） | **打通相互隔离的执行资源池**：将多个成员集群纳入同一分发范围，使一个项目的任务可以使用其他合格成员的执行资源。 | 接收 ARC 产生的 Runner 对象，将其分发至成员 Kubernetes，并把执行状态返回给 ARC；不取代成员的节点级调度。 |
-| 成员 Kubernetes 与 Runner Pod | **提供实际、相互隔离的任务执行能力**：让集中管理的 Runner 在选中的成员集群使用当地计算资源执行 GitHub Job。 | 接收 Karmada 下发的 Runner 工作负载，使用成员原生调度与网络执行任务，并向控制面反馈状态。 |
+| Dispatcher（目标联邦调度者） | **减少资源错配和任务等待**：根据可信 NPU Profile、容量事实、FIFO/公平及 Reserve/Backfill 管理待放行 Runner Binding。 | 只决定可授权的目标成员和放行时机；向 Karmada 写放置决定，不设置成员 NPU Pod 的 Node。 |
+| Karmada（复用的联邦子系统） | **实现跨成员资源对象传播与状态协调**：通过 Binding/Work、传播策略和资源解释器连接成员。 | 复用成员资格、Runner/JIT 传播及状态回传；对同一 Binding 不与 Dispatcher 重复决定目标成员。 |
+| 成员 Kubernetes / Volcano 与 NPU Pod | **实际节点放置和设备执行**：支持单 Pod 以及多 Pod/Gang 的 NPU 资源与拓扑调度。 | 在成员 API 接收 Runner/Job Pod，Volcano 选择 NPU Node 或 PodGroup，kubelet/Device Plugin 分配设备；回传实际执行事实。 |
 | ARC–Karmada 集成适配（本系统设计） | **消除两套上游系统之间的语义与环境差异**：保障跨控制面访问、临时注册凭证可用、Runner 就绪状态可被正确识别。 | 在 ARC、Karmada 与成员 Kubernetes 之间补齐通信鉴权、依赖传播和状态聚合约束，使上述管理、分发、执行链路闭环。 |
 
-**边界：** GitHub 提供任务；ARC/Karmada/Kubernetes 为复用组件。`karmada-search` 不在范围内，NPU 插件属成员依赖。不承诺均匀分配或固定收益。
+**边界：** GitHub 提供 Job 与执行结果；ARC 管理 Runner；Dispatcher 提供联邦选择与排队策略；Karmada 传播 Runner/JIT；成员 Volcano 选择 Node，不把整组 36 卡请求强加给单 Node。`karmada-search` 不在范围内。
 
 部署关系见 3.6；资源、状态与接口契约见 3.5、4.4～4.6 和第 5 章。
 
@@ -306,6 +326,10 @@ erDiagram
   WORK }o--|| MEMBER_CLUSTER : "定向交付"
 ```
 
+<p align="center">图 3-2 领域对象与联邦身份关系</p>
+
+说明：业务身份关联不等于 Kubernetes OwnerReference，实际所有权以目标版本 API 为准。
+
 图为**领域概念关系**，不等于原生 Kubernetes OwnerReference；动态资源真实归属由所选 ARC/Karmada 版本定义。以下表格是实现和销毁规格：
 
 | 领域对象 | 权威生产者 | 主要关联/消费者 | 寿命分类 | 处置与销毁要求 |
@@ -321,8 +345,9 @@ erDiagram
 | ResourceBinding / Work | Karmada 生成 | 联邦调度与成员期望资源载体 | 随 Pod/策略 | 控制面到执行面的对象关系 |
 | Pod.status | 成员 Kubernetes 产生 | 供 ARC 判断 Runner 状态 | 随 Pod | containerStatuses、conditions、Phase |
 | MemberCluster / NPU 资源 | Karmada + 成员 K8s / Device Plugin | 集群资格、节点扩展资源 | 长期运行时 | Ready、labels、allocatable、扩展资源 |
+| Runner Service Resource Profile | 平台服务目录（目标逻辑对象，非上游 CRD） | Dispatcher 成员准入；实际 NPU Pod/PodGroup 对账 | 服务配置版本 | Runner 服务、profileVersion、资源族、逐 Pod requests、拓扑和 Gang 要求 |
 
-**数据分级与销毁（D）**：GitHub PAT/App 凭证、Listener Token、JIT Secret 属敏感数据，禁止在日志、Git、工单附件输出值；运行时对象删除由 ARC/Karmada 所有权规则驱动，审计只保留非敏感 ID/状态。Job 日志、镜像与第三方系统持久数据的保留/销毁服从各自系统策略，**不因 Pod 删除自动消失**。证书/Token 轮换同时考虑控制面存储、成员副本和日志暴露面。销毁保留期/合规等级若需精确数值，由企业数据分类制度提供（P），不虚构默认周期。
+**数据分级与销毁**：GitHub PAT/App 凭证、Listener Token、JIT Secret 属敏感数据，禁止在日志、Git、工单附件输出值；运行时对象删除由 ARC/Karmada 所有权规则驱动，审计只保留非敏感 ID/状态。Job 日志、镜像与第三方系统持久数据的保留/销毁服从各自系统策略，**不因 Pod 删除自动消失**。证书/Token 轮换同时考虑控制面存储、成员副本和日志暴露面。销毁保留期/合规等级若需精确数值，由企业数据分类制度提供（P），具体期限按数据管理制度确定。
 
 ### 3.5.1 对象标识、引用关系及权威事实
 
@@ -340,13 +365,13 @@ erDiagram
 | JIT Secret（控制面及成员） | 各自 context + namespace + name + UID；以 Pod 实际 secretKeyRef/volume 引用关联 | ARC 产生 JIT 配置，Karmada 传播依赖 | 临时敏感对象；副本分别检查清理状态 |
 | GitHub 主凭证/Listener Token | context + namespace + name + UID、非敏感版本标识 | 凭证管理员 | 不能依靠删除临时 Runner 来证明凭证被撤销 |
 | PropagationPolicy | context + namespace + name + UID | 平台声明，Karmada 消费 | 选择范围，不是 Runner Pod 的 Owner |
-| ResourceBinding / Work | context + namespace + name + UID、目标成员与 Karmada 原生关联字段 | Karmada：放置、传播及删除调谐 | Work 已分发不等于成员 Pod Ready |
-| Cluster/Node/NPU 资源 | Cluster + Node 身份、扩展资源名称 | Karmada/成员 Kubernetes/Device Plugin | 成员聚合资源不代表单节点可调度 |
+| ResourceBinding / Work | context + namespace + name + UID、目标成员与 Karmada 原生关联字段 | Karmada：放置、传播及删除调谐；Dispatcher 记录 ProfileVersion/grant | Work 已分发不等于成员 Pod Ready；授权 grant 须与实际 NPU Pod/PodGroup 对账 |
+| Cluster/Node/NPU 资源 | Cluster + Node 身份、扩展资源名称 | Karmada/成员 Kubernetes/Device Plugin | 单 Pod 必须单 Node 完整可行，多 Pod/Gang 必须同成员整组可行，聚合容量不构成证明 |
 | Pod.status | 对应 context + Pod UID + 采样/观察时间 | 成员 kubelet 为运行事实来源；Karmada 为控制面同步者 | Ready 不能推导 GitHub Job 成功 |
 
 **跨域关联链**：GitHub repository/run/job/attempt → Runner Scale Set → ERS/ER → 控制面 Pod UID → ResourceBinding/Work 与目标 Cluster → 成员 Pod UID → 实际 Pod 状态/事件。每条关联须标明具体 API 字段或事件来源、观测时间与关联置信状态；缺失 ID 时保留“未关联”，禁止通过同名猜测。GitHub runner ID、ER UID、Pod UID 和 Job ID 不得混为一个身份。当前 Manifest **没有提供全链路审计实现**，这里规定的是设计契约。
 
-**权威状态原则**：GitHub 管理 Job 结果；ARC 管理 Runner 期望与生命周期；Karmada 管理传播的目标成员和 Work；成员 Kubernetes 管理真实 Pod 状态及节点调度。遇到短暂不一致时保留来源和时间，不以 Pod Ready 伪造 Job Completed，不以控制面 Work 成功伪造节点调度成功。状态冲突的完整转换规则由 T3 完善。
+**权威状态原则**：GitHub 管理 Job 结果；ARC 管理 Runner 期望与生命周期；Karmada 管理传播的目标成员和 Work；成员 Kubernetes 管理真实 Pod 状态及节点调度。遇到短暂不一致时保留来源和时间，不以 Pod Ready 伪造 Job Completed，不以控制面 Work 成功伪造节点调度成功。状态冲突的完整转换规则由 第 4.5 节定义。
 
 ### 3.5.2 创建、删除与数据销毁责任
 
@@ -360,7 +385,7 @@ erDiagram
 | 删除被 Finalizer 阻塞 | 所属控制器/受权运维确认对象所有权及依赖 | 保留 context、UID、DeletionTimestamp、Finalizer、事件；不删除未知 Finalizer |
 | 审计/日志/外部 Job 历史销毁 | 各数据系统所有者依据数据分级与保留制度处理 | 只记录非敏感标识及事件；外部持久数据不随 Pod 删除自动消失 |
 
-**销毁约束**：① 不以跨集群相同 name/UID 推断相同对象；② 不用审计关联代替 OwnerReference；③ 成员失联后不宣称资源已经清理；④ 未确认 Job 状态前不因 Pod 消失而重新执行；⑤ 不在 Git、日志或工单中保存凭证值。分类等级、期限及已下发副本的强制撤销手段须由企业数据管理制度或凭证机制确定（P），不得编造默认期限。目标 ARC/Karmada 版本的 OwnerReference 与 Finalizer 细节仍须以真实 CRD/控制器行为核实，本文不虚构固定引用字段。
+**销毁约束**：① 不以跨集群相同 name/UID 推断相同对象；② 不用审计关联代替 OwnerReference；③ 成员失联后不宣称资源已经清理；④ 未确认 Job 状态前不因 Pod 消失而重新执行；⑤ 不在 Git、日志或工单中保存凭证值。分类等级、期限及已下发副本的强制撤销手段须由企业数据管理制度或凭证机制确定（P），具体期限由数据管理制度规定。目标 ARC/Karmada 版本的 OwnerReference 与 Finalizer 细节仍须以真实 CRD/控制器行为核实，具体字段以目标版本为准。
 
 **依据**：[GitHub ARC 工作原理](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)、[Kubernetes 所有权与垃圾回收](https://kubernetes.io/docs/concepts/architecture/garbage-collection/)、[Karmada PropagationPolicy](https://karmada.io/docs/userguide/scheduling/propagation-policy/)。上游文档支持各组件的原生职责，不证明所有跨域清理动作具有原子性或自动完成。
 
@@ -368,12 +393,17 @@ erDiagram
 
 ![ARC 与 Karmada 联邦调度执行系统部署架构](images/arc-karmada-deployment-architecture.svg)
 
+<p align="center">图 3-5 ARC、Karmada 与成员 NPU 调度的目标部署拓扑</p>
+
+说明：管理面和执行面可按多地域部署；本图不依赖 Kind 等 PoC 配置。
+
 | 部署域 | 构件 | 运行接口 | 设计约束 |
 |---|---|---|---|
-| ARC 管理域 | 官方 ARC Controller | GitHub API、统一 Karmada API | 可以是管理 Kubernetes/容器部署；不要求在每个成员单独部署 |
-| Karmada 控制面 | API、Policy/Scheduler、状态解释扩展 | 多成员 Kubernetes API | API、证书、网络、成员资格、可用性由部署管理提供 |
+| ARC 管理域 | 官方 ARC Controller、Listener（位置可配置） | GitHub API、统一 Karmada API | 负责 Runner 供给与回收，不控制成员 NPU Node |
+| 联邦调度域 | **Dispatcher**、容量账本与预留协调 | Runner Binding、成员容量/Profile、Node 保护租约 | 唯一 Binding 写者；负责 Hold/Release 和选择成员；故障时安全对账与接管 |
+| Karmada 控制面 | API、Policy/Binding/Work、状态解释扩展 | 多成员 Kubernetes API | 负责资源对象传播及状态，不替代 Dispatcher 对目标 Runner Binding 的成员选择 |
 | Listener 成员域 | Listener Pod、独立控制面身份 | GitHub Actions、Karmada HTTPS API | 示例固定在 member1；目标成员是可配置的 Placement |
-| Runner 执行域 | Runner Pod、JIT Secret、Runner SA、可选 NPU 资源 | GitHub Actions、成员 kubelet/Runtime | 只允许在满足资源、镜像和安全约束的成员运行 |
+| Runner 与 NPU 执行域 | Runner Pod、JIT Secret、真实 NPU Pod/PodGroup、Volcano、Device Plugin | GitHub Actions、成员 API/kubelet/Runtime | 单 Pod 检查单 Node；多 Pod 按同成员 Gang/拓扑调度，真实 NPU 资源请求与 Profile 对账 |
 | 平台外 | 镜像仓库、身份/密钥服务、运维/观测 | 拉取、认证、日志/指标 | 不要求跨成员 Pod 网络直连 |
 
 **配置输入清单（P）**：`runnerScaleSetName` / `runs-on`、GitHub URL、Runner 镜像/digest、控制面 API DNS/IP/port/SAN、CA、Token audience/TTL、目标成员集合、调度权重、Namespace、NPU 资源名、节点标签、业务 SLO。当前 Manifest 的 `karmada-runner`、`member1/member2`、`172.22.0.4:32443` 是示例值，后两者不应硬编码到通用部署工具。
@@ -402,7 +432,7 @@ erDiagram
 
 # 4 功能域规格变更与设计
 
-> 本章定义跨功能规则；实现见第 5 章。**U** 上游能力；**D** 本方案约束；**P** 部署参数。区分 Manifest 现状与目标，差异需处理。
+跨功能规格统一定义策略、身份、状态、容量及故障约束，具体实现接口见第 5 章。
 
 ## 4.1 功能域规格变更
 
@@ -415,12 +445,14 @@ erDiagram
 | SP-05 Listener API 身份 | 示例通过单独的 Token 和 CA 证书访问固定 API 地址，Token 由脚本签发。 | 平台必须提供可配置的 API 地址、可信 CA、最小权限和凭证更新规则。必须区分网络、证书、身份认证和权限错误。 | 身份管理与部署维护者 |
 | SP-06 Runner Pod 状态 | 当前 Lua 解释器选取第一个非空 `status`。 | 状态解释必须保留 ARC 所需的 Pod 字段。该规则只适用于一个 Runner Pod 在一个成员运行且状态来源没有冲突的情况。 | 状态适配维护者 |
 | SP-07 临时资源生命周期 | ARC 和 Karmada 分别处理临时对象的删除。 | 平台必须能够关联同一任务的 Runner、Pod、JIT Secret 和联邦对象。删除失败时必须保留原因，不能任意清空未知 Finalizer。 | 控制器维护者和运维人员 |
-| SP-08 NPU 资源规格 | 当前示例没有固定 NPU 资源名称及设备插件。 | 部署方必须从目标设备插件取得扩展资源名称与分配规则。平台据此配置成员筛选和 Runner Pod 资源请求。 | 设备与资源池维护者 |
+| SP-08 NPU 资源规格 | 当前示例无 NPU 资源规格与设备插件配置。 | 服务目录发布可信 NPU Resource Profile 并关联 Runner Service；Dispatcher 依据 Profile 做成员容量准入，成员 Volcano 按真实 NPU Pod/PodGroup 执行节点与 Gang 调度，设备插件负责设备分配。 | Runner 服务/联邦调度/成员资源池维护者 |
 | SP-09 安全与可观测性 | 现有资料通过 GitHub Run、Pod、Work 和日志进行局部诊断。 | 平台必须保存任务和联邦资源之间可追踪的标识，记录错误类型，禁止将凭证值写入日志。 | 平台运维与安全管理员 |
 
-**待实施差异**：SP-03、SP-04、SP-05；目标不代表已实施。设计不以 PoC 为前提。
+**配置差异：** 现有 Pod 传播选择器、主凭证传播范围和 Listener/Controller 权限尚未满足 SP-03～SP-05 的目标约束。
 
 ## 4.2 SP-01 Runner 服务与任务入口规格设计
+
+**场景：** vLLM 开发者提交 PR 时仍使用同一个 Runner 标签。无论实际运行在 vLLM 还是 vLLM-Omni 成员集群，工作流都不包含集群名称；标签与 Scale Set 名称的一致性由平台配置保证。
 
 ### 4.2.1 实现思路
 
@@ -434,12 +466,15 @@ erDiagram
 | GitHub 目标 | `spec.githubConfigUrl` | 平台管理员必须为 `spec.githubConfigUrl` 设置已授权的仓库或组织地址。Runner 不得注册到未授权的仓库或组织。 |
 | 主凭证 | `spec.githubConfigSecret` | `spec.githubConfigSecret` 引用的凭证必须由可信管理域提供，并遵守 SP-04 的分发限制。 |
 | 弹性区间 | `spec.minRunners/maxRunners` | `spec.minRunners` 与 `spec.maxRunners` 必须满足 `0 ≤ minRunners ≤ maxRunners`。具体数值由部署配置确定。 |
-| Runner 镜像与 Pod 模板 | `spec.template` | `spec.template` 必须声明 Runner 镜像、资源请求、ServiceAccount 及必要的容器安全配置。 |
+| Runner 镜像与 Pod 模板 | `spec.template` | `spec.template` 必须声明 Runner 镜像、资源请求、ServiceAccount 及必要的容器安全配置；container mode 下可能仅声明 CPU Runner，实际 NPU 需求另见服务 Profile（PL-D07）。 |
 | 版本约束 | ARC CRD/Controller/Listener/RunnerSet label | 部署方必须核对 ARC Controller、CRD 和 Runner 资源的版本兼容性。现有 0.15.0 只是配置示例。 |
+| NPU 资源规格关联 | Runner Service 目录中的 `profileVersion` 逻辑关系 | Profile 必须在 Dispatcher 放行前可读取且与实际 NPU Pod/PodGroup 一致；`runs-on` 本身不表达卡数，服务内混合规格须有可信的需求来源。 |
 
 标签无匹配时，不得替换服务；排队由 GitHub 处理。权限不足或容量已满时，保留错误及容量状态，不得绕过隔离。
 
 ## 4.3 SP-02/SP-03 联邦调度与依赖传播规格设计
+
+**场景：** vLLM 的 36 卡任务到来时，本地成员资源不足。Dispatcher 检查授权成员与节点/拓扑容量；如果其他成员有可完整满足任务的容量，选择该成员放行。若各成员容量均不足，保留队首任务的容量保护，并允许不影响其未来启动的较小任务回填。Karmada 负责传播已获准的 Pod 与依赖，成员集群完成节点选择。
 
 ### 4.3.1 实现思路
 
@@ -461,18 +496,18 @@ erDiagram
 
 ### 4.3.3 成员准入、容量与放置判定
 
-**输入**：Runner Pod 的资源请求与节点约束、目标 Runner 服务的授权成员集合、PropagationPolicy、成员健康状态和来自成员 Kubernetes 的实际 Node/Pod 调度事实。不能把成员级空闲总量等同于某个节点或某个拓扑域可以满足整个请求。
+**输入**：目标 Runner Service 的可信 Profile（PL-D07）、实际 Runner Pod 的 CPU/常规资源请求、候选成员授权、PropagationPolicy、成员 Node/Pod/PodGroup 状态和可用容量事实。**真正 NPU 请求可能在 Runner 接单后才由 workflow Pod 声明**，不能凭 CPU Runner requests 计算 NPU 容量；单 Pod 要求某个 Node 完整可放置，多 Pod 要求同一成员内整组拓扑可行。
 
-**硬性准入约束**（D）：只允许在授权成员范围内选择目标；不得删除 Runner 的架构/设备/租户约束来促成调度；每个独立 Runner Pod 在正常设计中至多关联一个目标执行成员；不得把两个不同成员上的零散 NPU 资源拼成单个 Pod 可用设备。对 NPU 工作负载，还必须满足资源名、数量、节点级可放置性及设备环境兼容性，设备能力未获得可靠事实时不得声称满足。
+**硬性准入约束**（D）：仅在授权成员选择目标；不得削减设备/拓扑/租户约束；每个 Runner 的目标成员唯一。单个 Pod 的请求必须放在一个节点，多 Pod 工作负载的最小运行组必须在**同一个成员集群**内满足各 Pod/Node 需求及协同拓扑，未经设计不拼接跨成员 Gang。设备类型、需求版本或容量事实未知时不得声称成员 Feasible；见 PL-D02/D07。
 
 **职责分界与判定：**
 
 | 阶段 | 执行主体 | 可以确定的事实 | 不能据此确定的事实 | 失败时行为 |
 |---|---|---|---|---|
 | 服务匹配 | GitHub/ARC | 标签、服务授权及需求 | 可用的执行节点或 NPU 卡 | 按 GitHub/ARC 的原生等待和报错机制处理 |
-| 候选过滤 | Karmada Policy/Scheduler | 策略允许的 Cluster 和可见的成员状态 | 所有节点瞬时可调度、设备拓扑无碎片 | 无合格成员时不得扩大授权范围；保留不可调度原因 |
+| 候选过滤 | Karmada Policy + Dispatcher | 策略授权成员、可信 NPU Profile 与成员容量候选 | 成员 Node 最终绑定、Gang 资源原子保证 | 无可信完整需求/成员拓扑时 Hold 并记录原因；不得扩大授权 |
 | 成员放置 | Karmada Binding/Work | 已选择的目标成员及传播状态 | Pod 已经被 kube-scheduler 放到合格节点 | 不把 Work 分发成功记为 Runner 就绪 |
-| 节点调度 | 成员 kube-scheduler | 节点上的资源请求、污点/亲和性及可调度性 | GitHub Job 已成功执行 | 资源不足时 Pending/FailedScheduling；保留请求不降级 |
+| 节点/多 Pod 调度 | 成员 kube-scheduler/Volcano | 单 Pod Node 请求，或 PodGroup/Gang 各 Pod 的完整请求及最小同时运行数 | GitHub Job 已成功执行或联邦层准入估计完全准确 | 资源不足时 Pending/Unschedulable；保留请求及 PodGroup 原因，不降级 |
 | 实际运行 | kubelet/Device Plugin/Runner | 设备分配、Pod 状态及 Runner 注册过程 | 单凭 Pod Ready 判断 GitHub Job 结果 | 运行异常按状态与生命周期契约处理，不自行重派 Job |
 
 **容量正确性边界**：当前 Manifest 没有 Dispatcher 或未落地占用跟踪。PL-D02 要求 Dispatcher 在成员选择前参考成员可放置容量，**但不运行 NPU Pod 的节点 Filter/Score/Bind**。PL-D03 在同一容量事实上管理 Binding Hold/Release、候选 Node 预留及 Backfill；成员实际 Node 绑定仍是最终事实。异步快照不是原子容量预约；已放行 Runner 的边界见 PL-D01。
@@ -482,9 +517,9 @@ erDiagram
 1. 策略未匹配、成员无资格：不得自动扩大候选集、创建第二份 Job 或改用其他 Runner 类型。
 2. 传播已完成但成员 Pod Pending：诊断节点资源、设备插件、亲和性和镜像/凭证状态；不得把 Pending 自动解释为 GitHub 重新排队。
 3. 成员状态或容量快照滞后：以成员实际调度状态为最终运行事实；不根据旧快照宣称可执行。
-4. 成员失联：记录 Binding/Work、Pod 和 Runner 状态分歧；运行中 Job 不自动推断为可安全迁移，具体身份/生命周期由 T2/T3 定义。
+4. 成员失联：记录 Binding/Work、Pod 和 Runner 状态分歧；运行中 Job 不自动推断为可安全迁移，身份与生命周期关系见第 3.5、4.5 节。
 
-**验收性设计检查**：针对授权/未授权成员、无候选成员、成员空闲但节点碎片化、JIT Secret 晚到、节点设备不足、成员故障六类场景，应能从本章规则唯一确定职责和允许/禁止的处理动作；这是一组文档检查场景，不要求在 T1 执行测试。
+**异常场景：** 无授权成员、节点容量碎片、JIT Secret 晚到、设备不足或成员故障时，均应保留实际原因；不得放宽授权、降低 NPU 请求或根据传播异常直接重派 GitHub Job。
 
 
 ### 4.3.4 独立 Runner 放置失败的决策与降级（PL-D01）
@@ -505,9 +540,9 @@ erDiagram
 | 已放置成员失联，Runner 是否注册/Job 是否启动未知 | GitHub Job/Runner、ARC ER、Karmada Binding、成员 Pod 各有事实权威 | 进入 **ExecutionUnknown** 诊断状态；平台不得复制同一个 Runner 或自行重新派发 Job | 旧成员销毁未确认、JIT 副本未确认时保留高风险告警 |
 | 有明确证据 Runner 未注册且旧实例已删除 | ARC 的 Runner 生命周期与成员副本清理事实 | 仍按 **ARC/GitHub 官方机制**产生后续实例；不得把 Karmada 重定位视为同一 Job 的安全重试 | 关联新旧 Runner 身份；禁止复用过期 JIT |
 
-**容量语义**：合格成员数、成员可用卡数、**单节点可放置的完整资源请求**、Runner 并发上限分别记录；跨成员空闲卡数之和不构成放置成功保证。该设计**不满足**“有任意合格空闲节点时旧 Pod 必然自动重选成功”的强 SLO；若业务批准此要求，必须新增独立的准入/重选规格，不可用 `Divided/Weighted` 替代。
+**容量语义**：合格成员数、成员可用卡数、**单 Pod 单节点可放置性 / 多 Pod 同成员整组可放置性**、Runner 并发上限分别记录；跨成员空闲卡数之和不构成放置成功保证。该设计**不满足**“有任意合格空闲节点时旧 Pod 必然自动重选成功”的强 SLO；若业务批准此要求，必须新增独立的准入/重选规格，不可用 `Divided/Weighted` 替代。
 
-**故障迁移边界**：Karmada 的 `PropagationPolicy.spec.failover` 是可选机制；官方文档对其迁移保证主要以可管理副本工作负载说明。即使目标版本支持某种 Pod 迁移，也不能推出 GitHub Job 与 ARC Runner 的安全切换。当前不启用对已创建 Runner 的自动跨成员 failover。验收只检查策略、对象身份与异常决策链，不进行 PoC。[Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)；[Failover Analysis](https://karmada.io/docs/next/userguide/failover/failover-analysis/)。
+**故障迁移边界**：Karmada 的 `PropagationPolicy.spec.failover` 是可选机制；官方文档对其迁移保证主要以可管理副本工作负载说明。即使目标版本支持某种 Pod 迁移，也不能推出 GitHub Job 与 ARC Runner 的安全切换。对已创建 Runner 不启用自动跨成员 failover；异常处理根据策略、对象身份及真实 Job 状态决定。[Karmada PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/)；[Failover Analysis](https://karmada.io/docs/next/userguide/failover/failover-analysis/)。
 
 
 
@@ -525,7 +560,7 @@ erDiagram
 | 成员节点调度 | **成员 kube-scheduler 或 Volcano** | 按实际 NPU workflow Pod 的 resources、NodeAffinity、污点/容忍、拓扑及节点状态过滤/评分/绑定 | 不改跨成员 Runner 队列顺序和成员选择 |
 | 设备分配 | **成员 kubelet + NPU Device Plugin** | 设备插件向 kubelet 发布扩展资源；节点绑定后由 kubelet 协同设备插件分配设备 | 设备插件不替 Karmada 选成员 |
 
-**NPU 需求声明与容量证据**：当 Runner Pod 本身不申请 NPU，Runner 服务必须向 Dispatcher 提供可核对的预期 NPU 类型和数量（例如 Runner 规格/元数据经资源解释器形成的需求），不能从 CPU Runner Pod 的 requests 推断未来 workflow Pod 的 NPU 需求。**成员容量上报不等于节点选定**：Dispatcher 需要判断成员能否运行完整的 NPU 请求，必要时参考该成员的 **Node/Pod 快照或 Karmada Scheduler Estimator** 获得单节点可放置性与拓扑约束，而不是只看 Cluster 聚合空闲卡数。Dispatcher 可基于候选节点估算进行**资源账本与预留**，但它记录的节点是容量保护目标，不是对 workflow Pod 的最终节点绑定；由成员调度器保留实际 Filter/Score/Bind 决策权。Estimator 对厂商 NPU 拓扑和实际工作负载的覆盖需核对锁定版本。
+**NPU 需求声明与容量证据**：当 Runner Pod 本身不申请 NPU，Dispatcher 使用 PL-D07 的可信 Runner Service Profile，包含 NPU 资源名、数量、单 Pod/多 Pod 形态与拓扑，不从 CPU Runner requests 推断将来需求。**成员容量上报不等于节点选定**：单 Pod 检查完整单节点可行性；多 Pod/Gang 检查**成员内整组**资源与拓扑可行性，必要时参考成员 Node/Pod/PodGroup 快照或适用的 Estimator，而非仅统计 Cluster 聚合卡数。Dispatcher 可基于候选节点估算进行**资源账本与预留**，但它记录的节点是容量保护目标，不是对 workflow Pod 的最终节点绑定；由成员调度器保留实际 Filter/Score/Bind 决策权。Estimator 对厂商 NPU 拓扑和实际工作负载的覆盖需核对锁定版本。
 
 **单一调度决策者**：Runner Binding 使用经版本验证的 `spec.schedulerName` 指向 Dispatcher；普通 Karmada Scheduler 不应同时修改该 Binding 的 `spec.clusters`。Dispatcher 按队列策略持有或放行 Binding，放行后由 Karmada 原生控制器创建 Work。不能用 Karmada 的普通 Filter/Score 插件替代跨 Runner 的 FIFO、等待与回填，也不能用 `Divided/Weighted` 宣称跨独立 Pod 均匀调度。对 Karmada failover、descheduler 与应急调度器是否会修改同一 Binding，须定义互斥、接管和恢复规则。
 
@@ -560,6 +595,10 @@ sequenceDiagram
     end
 ```
 
+<p align="center">图 4-1 Dispatcher 与成员调度器的两级放置路径</p>
+
+说明：Dispatcher 只选成员，实际 NPU Node 由成员 Volcano/kube-scheduler 决定。
+
 **静态反例与判据**：
 
 | 场景 | 联邦层决定 | 成员层决定 |
@@ -570,7 +609,7 @@ sequenceDiagram
 | Dispatcher 已为队首保护某 Node，但 member kube-scheduler 最终选择其他 Node | 观察成员反馈，更新/释放预留，不能把预留当绑定成功 | 根据真实节点状态决定绑定；保留调度事件 |
 | workflow 被 hooks 固定到 CPU Runner 节点 | 未确认 hooks 是否支持解耦前，不承诺全局可放置性 | 遵循实际的 Pod nodeName/affinity 限制，失败要报告 |
 
-**接口证据**：[Karmada Components](https://karmada.io/docs/next/core-concepts/components/)、[Karmada Scheduler Framework](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)、[Karmada Scheduler Estimator](https://karmada.io/docs/next/core-concepts/components/)、[Kubernetes kube-scheduler](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)、[Kubernetes Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)。具体 `schedulerName`、Binding 更新字段、hooks 行为和节点预留机制需按目标版本与对应代码核对；本节不修改运行代码或 Manifest。
+**相关接口：**[Karmada Components](https://karmada.io/docs/next/core-concepts/components/)、[Karmada Scheduler Framework](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)、[Karmada Scheduler Estimator](https://karmada.io/docs/next/core-concepts/components/)、[Kubernetes kube-scheduler](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)、[Kubernetes Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)。具体 `schedulerName`、Binding 字段、hooks 行为和节点预留机制须与目标版本接口匹配。
 
 
 ### 4.3.6 Dispatcher 队列、Reserve Node 与安全 Backfill（PL-D03）
@@ -606,15 +645,15 @@ sequenceDiagram
 **单次决策与放行**：
 
 1. 收集已入队且未取消的 Binding，确认唯一调度者、成员健康和账本快照；恢复阶段先对账持久化未落地授予与预留。
-2. 在公平轮次中按租户 FIFO 确定队首；计算合格成员下的**单节点可放置容量候选**，而非跨 Node/Cluster 累加。若队首已有 Feasible 容量，选择成员并使用资源版本前置条件放行 Binding。
-3. 若队首暂不可行且达到已批准的预留触发条件，选择一个具备完整硬件容量但因可回收占用尚不可放置的**候选节点**，通过 Actuator 施加特定资源族的保护；不直接修改目标 workflow Pod 的 `nodeName`。若节点已有不受控长期占用或容量未知，不得承诺能靠等待排空。
+2. 在公平轮次中按租户 FIFO 确定队首；依据 Profile 计算合格成员：单 Pod 检查单节点、协同多 Pod 检查同成员整组可用节点与拓扑，禁止不受约束的跨成员卡数累加。若队首已有 Feasible 容量，选择成员并使用资源版本前置条件放行 Binding。
+3. 若队首暂不可行且达到预留触发条件：单 Pod 选择一台完整可容纳的候选节点；多 Pod 根据 Profile 选择同成员内**满足各 Pod 与拓扑需求的候选节点集合**，Actuator 对集合实施同一授权租约的容量保护；不直接设置任何 workflow Pod 的 `nodeName`。若节点已有不受控长期占用或容量未知，不得承诺能靠等待排空。
 4. 允许其他任务在**不消耗保留容量、不会抢走队首保护节点、不会突破授权/公平上限**时 Backfill。已启用某资源组预留时，该组其他 Runner 保持 Hold，防止共享 Toleration 的后继任务越过队首。
 5. 放行必须提交**唯一 Cluster**的 Binding 写入与持久化 grant，更新 ledger；若资源版本冲突、对象已取消、授权/策略发生变化，则重新读取并决定，不因失败创建第二份 Runner。
 6. Runner 到成员后，只有实际 NPU workflow Pod 绑定并被容量快照覆盖，才能从“未落地授予”转换为“已占用”。等待成员反馈不代表 GitHub Job 正在运行；异常按 PL-D01、PL-D02 处理。
 
 **Reserve Node 安全条件（D）**：
 
-- **候选节点**：必须是该资源族的授权成员、可容纳完整请求且能被成员真实 Scheduler 接纳的 Node；Actuator 仅允许在白名单 NPU Node 修改预留 taint。禁止抢占、驱逐已有 Job 或盲目抢注其他调度器的预留。
+- **候选节点或节点集合**：必须位于该资源族的**同一授权成员**，单 Pod 可完整容纳，或多 Pod 的 PodGroup/Gang 请求及拓扑可以共同满足；Actuator 仅允许在白名单 NPU Node 修改预留 taint。禁止抢占、驱逐已有 Job 或盲目抢注其他调度器的预留。
 - **保护机制**：Node `NoSchedule` taint + 受信任的特定 reservation group 的精确 `Equal` toleration；禁止 `Exists` 通配。同组后继 Runner 也可能具有相同 toleration，必须由 Dispatcher **同时执行同组 Hold**；仅配置 taint 不能证明队首安全。
 - **时钟和失效**：逻辑预留到期时间与短租约 `reserved-until` **独立**；Dispatcher 持续续租，成员 Janitor 在归属和期限核验后清理过期保护。自动回收必须阻止 Dispatcher 死亡造成长期资源冻结。具体 TTL/续租/巡检时间为 P 类，不借用其他项目的示例数值冒充业务目标。
 - **生命周期**：`Eligible → Reserved → Draining → HeadReleased → WorkflowBound → Released`；队首取消、失去资格、节点故障、超时、Dispatcher 切主、预留被其他调度器占用必须分别有清理/重建分支。**仅 Dispatcher 放行 Runner、成员 Pod 已 Bound 不等于本预留成功完成**；需要关联被保护的队首实际 NPU Pod 的节点状态。
@@ -651,6 +690,10 @@ sequenceDiagram
     L-->>D: 更新 grant、预留与队列快照
 ```
 
+<p align="center">图 4-2 FIFO、Reserve Node 与安全 Backfill</p>
+
+说明：节点保护与同组 Hold 控制容量，不等于 NPU 卡级原子预约。
+
 **故障域、恢复和退化契约**：
 
 | 事件 | 必须执行的响应 | 不能做的事 |
@@ -664,8 +707,45 @@ sequenceDiagram
 
 **DFX 设计证据和待选参数（P）**：Dispatcher 按成员/资源族/租户统计联邦等待与资源承诺；成员 Volcano 按 NPU Pod PriorityClass 统计待调度队列、调度耗时和抢占/回收事件，分别记录队首等待、Hold、已分配卡时、Backfill、预留兑现及 Leader 切换。区分 `GitHub queued → started` 与 `Binding hold → release`，后者是 Dispatcher 自身等待，不可写成 GitHub 原生排队时间。PriorityClass 相对顺序、Volcano 调度动作、租户权重/公平阈值、预留时长、故障切换时限和等待目标均需正式批准；没有证据不填写性能承诺。
 
-**现有可复用设计**：组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；本节将其作为设计参考，**不将其代码或部署状态自动视为本仓库已实现**。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
+**参考方案：** 组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；其中的 Hold/Release、容量保护及 janitor 机制可作为接口参考；现有仓库尚未部署这些功能。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
 
+
+
+#### 4.3.6.1 Reserve Node 的保护粒度及多节点协同约束
+
+**架构选择（D）**：当前目标使用 Kubernetes Node `NoSchedule` taint 配合短租约、精确 Toleration 和 Dispatcher 同组 Hold。**保护粒度是整个 Node 的新 Pod 调度入口，不是精确的 NPU 卡数。** 这是一种保守的容量保护机制：若在 8 卡 Node 上为一项 2 卡任务创建保护，默认阻止其他不具备该保护组 Toleration 的新 Pod 使用**整台 Node**，不能把剩余 6 卡记作可供任意租户安全回填。正在运行的 Pod 不会因为 `NoSchedule` 被驱逐。[Kubernetes Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)。
+
+**方案选择与兼容边界**：
+
+| 保护方式 | 资源粒度与结果 | 设计选择 |
+|---|---|---|
+| Node `NoSchedule` + 短租约 + Group Hold | 整 Node 限制后续不匹配 Pod；只靠 Taint **不保证**队首会选择该 Node | **默认保守保护**；与成员 Volcano Node 选择权兼容，但有空闲卡损失 |
+| 将 `NoSchedule` 视作“仅保护 2/8 张卡” | 不成立，Node Taint 不表达设备切片 | 禁止作为账本/Backfill 依据 |
+| Volcano 定制成员调度策略、可证明的资源级预留协议 | 可以作为未来精细化保护方案，但需证明在成员 Node/PodGroup 层的真实资源锁定、授权和释放语义 | 独立专项设计；本方案不凭 Volcano 默认 Plugin 宣称支持精确卡级预留 |
+| 仅设置 ResourceQuota/Namespace 配额 | 限制资源总量，不能保证具体 Node 上的可放置空间 | 不替代 Reserve Node |
+
+**单 Pod 与多 Pod 的预留对象**：
+
+1. 单 Pod 资源规格需要一台可满足完整请求的候选 Node；Node 的可保留容量按该 Node 实际受保护的剩余可调度资源计入预算，而非仅按 Pod 的 2/4 卡 requests 记为“占用 2/4 卡”后再向其他任务开放其余卡。
+2. 多 Pod/Gang 的 Profile（PL-D07）应以**同一成员的一组候选 Node**为保护对象，包含 `reservationGroupId`、所属 Binding UID、profileVersion、所需各 Pod 资源/拓扑约束、集合版本、租期。所有候选 Node 均达到预期保护状态前，不得宣称整个 Gang 的容量保护成功。**不是跨成员 Node 集合**。
+3. Node 保护的建立、刷新、失效按实际成员 API 的对象版本/身份逐 Node 处理，不能假设写入多个 Node Taint 是 Kubernetes 原子事务。部分 Node 失败时，记录 `ReservationPartial`，立即使队首保护降为未确认并**按归属回滚已成功的部分**，防止泄漏；旧租约的 Node 只能由匹配归属和版本的控制器清理。
+4. Node Taint 只影响后续调度，不能为已运行 Pod 腾出 NPU 卡，也无法保证 Gang 任务完成绑定。Dispatcher 对预留集合持续对账 Node 占用及 Volcano PodGroup/PodScheduled，容量变化时重算可行性；若真实绑定不使用某候选 Node，释放对应保护并修正占用账本。
+5. 保护组 Toleration 必须由受信任的成员工作负载模板/准入路径对**队首实际 NPU Pod/PodGroup**授权，必须精确匹配 `key/value/effect`；同组后继仍需 Dispatcher Hold。未经授权的工作负载不得持有宽泛 `operator: Exists` 或通过直接设置 `nodeName` 绕过成员调度保护。
+6. **安全 Backfill 边界**：有 Node 保护时，其他任务只使用**不被保护的 Node**，并按其完整 Pod 或 PodGroup 请求判定可调度。若希望使用受保护 Node 的其他 NPU 卡，先设计能精确分割卡级资源且不会延迟队首的成员 Scheduler 约束；否则宁可降低短期利用率，也不能把保护容量与可回填容量双重计入。
+
+**容量与 DFX 计量**：把 `requestedNpuCards`（队首 Profile 需求）、`protectedNodeAllocatable`（保护节点的完整可调度资源）、`protectedNpuCardSeconds`（保护开销）、`actualBoundNpuCards`（真实 Pod 已绑定设备请求）及 `reservationPartialCount` 分开统计。**保护造成的闲置是可观测开销**，不能记为 NPU 已运行利用率；队列吞吐不能通过虚报部分卡级 Backfill 美化。监控 Node 保护耗时、集合不完整、租约泄漏、违规 Toleration 和外部绕过调度的写入。
+
+**失效与恢复判据**：
+
+| 情况 | 必须采取的行为 | 禁止行为 |
+|---|---|---|
+| 一台 8 卡 Node 为队首 2 卡预留，仍有 6 卡未被请求 | 保守保护整 Node 的新 Pod 入口，并把可能损失的卡时计入保护开销 | 将 6 卡当作普通 Backfill 可用额度，默认为 Taint 能实现卡级隔离 |
+| 多 Node Gang 预留 3 台中有 1 台写入 Taint 失败 | 标记 ReservationPartial，全部保护状态未确认；回滚前两台的本组保护或等待安全重试 | 在不完整 Node 集合上宣布队首有完整资源 |
+| 旧 Dispatcher 故障，成员存在过期保留 Taint | 成员 Janitor 按匹配归属、版本、租约撤销；新 Leader 先账本对账 | 无条件清除其他调度器的 Node Taint 或保留永久阻塞 |
+| 队首 NPU Pod 未携带精确 Toleration | 诊断 `ReservationAccessMismatch`，不能把保护成功等同于任务可运行 | 让 Dispatcher 直接设置 NPU Pod `nodeName` 绕过成员 Volcano |
+| 未管理的 Pod 使用 `nodeName` 或宽泛 Toleration 绕过保护 | 检测违规并冻结有风险的保护/新放行，依成员准入权限处理 | 宣称仅凭 `NoSchedule` 绝对保证 NPU 排他 |
+
+**限制**：Kubernetes 对 Node `NoSchedule` 的行为是原生事实；整 Node 保护、同组 Hold、Gang 成组租约和成员准入联动是本项目的目标集成设计，**不是原生 Taint 自带的全局资源预约协议**。如果目标成员无法保证精准 Toleration 和非受控调度绕过的治理，禁止宣称 Reserve Node 安全有效，须保守退化为 FIFO/等待策略。依据：[Kubernetes Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)、[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)。
 
 ### 4.3.7 跨租户加权公平仲裁（PL-D04）
 
@@ -698,7 +778,7 @@ sequenceDiagram
 
 | 设计输入 | 责任主体与规则 | 约束 |
 |---|---|---|
-| nightly 的任务 Pod | 工作流/Pod 模板或可信 hooks 在**成员 Pod 创建时**写入低优先级 `priorityClassName` | 类名存在于成员集群；声明位置在实际 NPU Pod 而非联邦 Binding |
+| nightly 的任务 Pod | 优先由 nightly 所提交的真实 NPU Pod/VolcanoJob 模板声明低优先级 `priorityClassName`；若由 hooks 生成，则需可靠的成员侧差异化模板来源 | 不能只在 CPU Runner Pod 或所有共享 Runner 的静态 Hook 模板设置相同类；详见 4.3.8.1 |
 | PR 的任务 Pod | 不设置低优先级，或使用经授权的高优先级类 | 同一成员 Volcano 调度队列中，PR 排在低优先级 nightly 前；不可由任意来源滥用高优先级 |
 | Volcano | 启用版本兼容的 `priority` plugin；依据 Node 资源和拓扑完成成员内调度 | `PriorityClass` 不能让 Dispatcher 重排尚未放行的 Runner Binding |
 | 不抢占现有任务 | 目标是优先调度**待运行**任务，不驱逐正在运行的 nightly | 目标 Volcano 调度配置不得开启会对现有 NPU Pod 造成抢占/回收的 `preempt` / `reclaim` 路径；`preemptionPolicy: Never` 仅约束该类 Pod **主动发起抢占**，并不防止其他高优先级 Pod 抢占它 |
@@ -713,6 +793,26 @@ sequenceDiagram
 4. Dispatcher 的 Reserve Node taint/同组 Hold 仍生效；Volcano 的 Priority Plugin 不能解除污点、成员授权或独立 Runner 的联邦预留。两级调度只共享资源容量和实际 Pod 调度反馈。
 
 **官方依据**：[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Actions：Allocate、Preempt 与 Reclaim](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass 与非抢占优先级](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。具体优先级数值、PriorityClass 名称、Volcano scheduler 配置及 Pod 模板来源是部署参数；**本设计不要求 Dispatcher 增加 Job 识别接口**。
+
+
+#### 4.3.8.1 PriorityClass 的设置入口与权限契约
+
+**选择的主路径（D）**：由 **nightly 工作流所创建的真实 NPU 负载**（Pod、VolcanoJob 的 Pod 模板或其 PodGroup）声明低优先级 `priorityClassName`，PR 工作负载保持正常优先级。两者仍可使用同一个 `runs-on` 和 ARC Runner 服务；Dispatcher 不需要认识 Job 的 PR/nightly 类别。优先级只在**成员 Volcano 已接收的工作负载**范围内生效，不取代联邦 FIFO/Reserve/Backfill。
+
+| 实际 NPU 工作负载入口 | 负责写入 `priorityClassName` 的主体 | 约束与结论 |
+|---|---|---|
+| nightly 在成员 API 中创建 Kubernetes Pod/Job 或 VolcanoJob | nightly 受控的 NPU 工作负载 Pod 模板；使用 VolcanoJob 时同步 Job/PodGroup 的优先级 | **推荐目标**：优先级与真实 NPU 工作负载绑定，保留同一 Runner `runs-on`；必须保证使用成员 Volcano 调度入口 |
+| ARC Kubernetes mode 的 runner-container-hooks 自动创建容器工作 Pod | 受控的 Hook PodSpec 模板或成员准入/模板组件 | 官方 Hook Extension 可修改 PodSpec；但**同一 Runner Service 上的一份静态模板不能天然区分 PR/nightly**。无可靠的成员侧区分依据时，不得声称可对两类自动应用不同优先级 |
+| Job 直接在 Runner Pod 内运行且该 Runner Pod 申请 NPU | 该 Runner Service 的 Runner Pod 模板 | 只有当该服务的负载类别一致时可静态设置；混用 PR/nightly 的 Runner Pod 不能凭相同模板区分 |
+| 未能证明 NPU Pod 模板中的优先级来源 | 无权威来源 | 采用默认成员调度优先级，记录 `PriorityUnspecified`，不把 Dispatcher 当作分类补丁 |
+
+**可信与公平边界**：PriorityClass 为成员集群级资源，名称和数值由平台配置保持一致；只有被授权的 nightly 模板/工作负载身份可以使用相应类别。用户提交的任意 Workflow、PR 标签或容器字段不得通过未受控的 PodSpec 注入升为平台保留的高优先级。具体通过命名空间/ServiceAccount 归属与 Kubernetes admission 规则约束。高优先级变更不允许覆盖设备申请、成员授权或 Dispatcher 的有效 Reserve Node taint。
+
+**无抢占约束**：正常模式只改变成员待调度 Pod/PodGroup 的排序；不得因 PR 到来驱逐已运行的 nightly。必须按目标 Volcano 版本确认 scheduler **actions** 中 `preempt`/`reclaim` 是否启用，并保证所需的 `allocate`/`enqueue`/`gang` 组合不会导致意外抢占。Kubernetes `PriorityClass.preemptionPolicy: Never` 只阻止该 Pod 主动抢占，不能阻止其他工作负载抢占它，**单靠该字段不满足全局不抢占目标**。
+
+**场景判据**：在同一成员内，PR 与低优先级 nightly 均已 Pending 且可行时，Volcano 的 Priority Plugin 应优先调度 PR；已有 nightly 运行时，PR 等待资源释放。若 nightly Pod 没有实际的低优先级类、PodGroup 与 Pod 优先级不一致，或未进入 Volcano 调度器，诊断应判为成员模板/调度配置问题，不归因于 Dispatcher。
+
+**上游依据**：[GitHub ARC Hook Extensions](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Scheduler Actions](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。
 
 ### 4.3.9 Dispatcher 故障接管与安全降级（PL-D06）
 
@@ -745,9 +845,11 @@ sequenceDiagram
 | 应急调度期间有带 reservation taint 的 Node | 不将 taint 当成空闲资源；确认成员实际可调度或保持等待 | 因错误 Estimator 结果把队首/后继引向被保护 Node |
 | Dispatcher 恢复时应急调度器仍在写入 | 保持 DEGRADED/FAIL_CLOSED，确认降级写者退出后再恢复 | 双写、旧 Binding 重新传播或复制运行 Job |
 
-**上游机制证据**：[Karmada `ResourceBinding` v1alpha2 API](https://karmada.io/docs/reference/karmada-api/work-resources/resource-binding-v1alpha2/) 和 [`PropagationPolicy` API](https://karmada.io/docs/reference/karmada-api/policy-resources/propagation-policy-v1alpha1/) 包含 schedulerName 等能力，**不表示官方内建 Dispatcher 的队列/fencing**；组织 [arc-fedsched 设计](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 的 Hold/Release 与 break-glass 论证可复用。具体升级版本、Karmada failover/descheduler 共写风险、保护 taint 兼容性均须锁定 API 和控制器机制；本文只描述目标架构。
+**相关机制：**[Karmada `ResourceBinding` v1alpha2 API](https://karmada.io/docs/reference/karmada-api/work-resources/resource-binding-v1alpha2/) 和 [`PropagationPolicy` API](https://karmada.io/docs/reference/karmada-api/policy-resources/propagation-policy-v1alpha1/) 包含 schedulerName 等能力，**不表示官方内建 Dispatcher 的队列/fencing**；组织 [arc-fedsched 设计](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 的 Hold/Release 与 break-glass 论证可复用。具体版本、Karmada failover/descheduler 并发修改风险及保护 taint 兼容性须与目标 API 和控制器机制对应。
 
 ## 4.4 SP-04/SP-05 身份、凭证与跨控制面访问规格设计
+
+**场景：** Runner 被放置到 vLLM-Omni 集群后，需要临时 JIT 注册信息才能连接 GitHub，但不需要持有 ARC 的长期 GitHub 管理凭证。Listener 访问统一 Karmada API 时应使用独立的受限身份。跨成员共享计算资源不意味着跨成员共享管理权限。
 
 ### 4.4.1 实现思路
 
@@ -805,10 +907,12 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 - SEC-05：所有请求验证 TLS 链与 SAN；不得输出 Token/Secret 值到事件、日志、审计。
 - SEC-06：成员失联时 Secret 副本存在性、删除及远端授权状态均记为未知，不伪造已撤销结论。
 
-**范围边界**：这里定义所需安全机制及校验要求，**不声称当前 Manifest 已满足**；对应实施变更及自动轮换能力不是 T4 的代码交付。
+**配置差异：** 当前主凭证传播、Controller 高权限和 Listener Token 更新机制仍需满足上述安全约束。
 
 
 ## 4.5 SP-06/SP-07 状态与生命周期规格设计
+
+**场景：** Runner 已传播到 vLLM-Omni 集群，但 JIT Secret 仍在同步，Pod 暂时未就绪；或者 Job 已结束而成员集群暂时失联。管理面必须区分“已选成员”“Pod Ready”“Runner 注册”“Job 完成”和“成员资源已清理”，避免提前分派或重复执行。
 
 ### 4.5.1 实现思路
 
@@ -854,6 +958,10 @@ stateDiagram-v2
   Deleting --> CleanupUnknown: 成员失联/Finalizer 阻塞
   CleanupUnknown --> Reclaimed: 恢复连接并核对
 ```
+
+<p align="center">图 4-3 跨域 Runner 状态与生命周期转换</p>
+
+说明：GitHub Job、ARC Runner 和 Kubernetes Pod 各自维护权威状态。
 
 | 约束 | 不变量与禁止行为 |
 |---|---|
@@ -912,9 +1020,11 @@ stateDiagram-v2
 
 ## 4.6 SP-08 NPU 资源规格设计
 
+**场景：** vLLM 一次 CI 可能需要约 36 张卡，但这不等于单 Pod 需要单节点 36 卡。若它由多个 Pod 跨节点协同运行，则必须先满足各 Pod 的资源请求及同成员 Gang/拓扑约束。跨成员空闲量之和不代表整组可启动。成员选择须依据真实的节点资源、拓扑约束和设备类型；节点调度及设备分配由成员 Kubernetes 和设备插件完成。
+
 ### 4.6.1 实现思路
 
-Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 Pod 请求（D）；Karmada 选成员、Kubernetes 选节点，不重实现设备分配。架构、OS、驱动、固件、插件及运行时由设备选型确定（P）。
+Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放行前声明资源需求（D）；Dispatcher 选择合格成员，Karmada 传播 Runner，成员 Kubernetes/Volcano 在 Node 上调度实际 NPU Pod 或 PodGroup/Gang，不重复实现设备分配。架构、OS、驱动、固件、插件及运行时由设备选型确定（P）。
 
 ### 4.6.2 实现设计
 
@@ -924,11 +1034,51 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 | 设备份额与数量 | 设备插件定义的资源单位与可共享规则。 | Dispatcher 的任务容量声明必须能映射到实际 NPU Pod requests；成员调度器按插件支持的分配单位判定节点容量。 |
 | 成员/节点标签 | 资源池配置、成员标签及节点标签。 | Karmada + Dispatcher 控制成员候选和放行；成员 kube-scheduler/Volcano 对实际 NPU Pod 选择节点。 |
 | 镜像/驱动/Runtime | 设备驱动、固件和容器运行时的兼容资料。 | 部署方必须核对 Runner 镜像与目标设备的兼容性；不能因为安装了设备插件就推定全部软件栈可用。 |
-| Runner Scale Set | 服务目录及 GitHub 工作流标签。 | 硬件能力不能互换时，平台必须配置不同 Runner 服务，不能默默把 NPU Job 交给普通 CPU Runner。 |
+| Runner Service Profile | 由平台发布的 Runner Service 规格及版本（PL-D07）。 | 稳定资源需求可在放行前映射到同一服务的 Profile；同一 `runs-on` 混用不同 NPU 需求时，必须有可信的需求描述或承认放行前无法精确判断，不得伪造资源容量。 |
 
-设备不足时，Pod 保持不可调度并保留原因；插件未就绪时不得删掉 NPU 请求或降级至 CPU 节点。成员 Kubernetes、设备插件和运维人员分别排障；型号、资源名、性能指标为部署参数（P）。
+设备不足时，Pod/PodGroup 保持不可调度并保留原因；插件未就绪、Profile 未知或实际 Pod 请求不一致时不得删除 NPU 请求、跨成员拼卡或降级至 CPU 节点。成员 Kubernetes、设备插件和运维人员分别排障；型号、资源名、性能指标为部署参数（P）。
+
+
+### 4.6.3 Runner Service Resource Profile 与准入契约（PL-D07）
+
+**设计决策（D）**：联邦容量准入以**平台可信的 Runner Service Resource Profile（以下简称 Profile）**为依据，不以 CPU Runner Pod 的 `resources.requests` 推算未来的 NPU 需求。Profile 是设计层的资源规格，不是 GitHub、ARC 或 Karmada 已存在的标准 CRD。平台通过服务目录将 Runner Service 标识映射到 Profile 及其版本，Dispatcher 在放行 Runner Binding **之前**获得此声明；成员真实 NPU Pod/PodGroup 的资源约束必须与之匹配。
+
+| 逻辑字段 | 来源与语义 | 设计约束 |
+|---|---|---|
+| `runnerServiceId`, `profileVersion` | 经授权的 Runner Service/Scale Set 配置和平台发布的不可变 Profile 版本 | `runs-on` 用来选择 Runner 服务，**不直接包含 NPU 需求数量**；不能仅信任 PR 可修改的标签 |
+| `deviceResourceName`, `deviceFamily` | 成员 Device Plugin 扩展资源名、受支持的设备型号与资源族 | Profile 必须与目标成员 Node `allocatable` 中的真实扩展资源匹配；不同设备型号不能无约束互换 |
+| `workloadShape` | `single-pod` 或 `multi-pod-group` | 单 Pod 应在成员单个 Node 上完整放置；多 Pod 以同成员的整组请求及 gang 最小同时运行要求做容量判断 |
+| `podRequests[]`, `minAvailable` | 各 Pod 的 NPU/CPU/内存请求、Pod 数量及多 Pod 同时就绪下限 | 对多 Pod 不能只声明聚合卡数；`minAvailable` 只能表达经过批准的最小可运行组，不能把需要全组启动的任务降为部分启动 |
+| `placementConstraints` | 成员授权、节点架构/亲和性、节点间拓扑与网络约束、软件环境 | 将成员资格、设备资源与拓扑能力区分；容量通过但拓扑不满足仍不可放行 |
+| `schedulerPolicy` | 目标成员调度器、PodGroup/Gang 需求及 Volcano 队列策略 | Dispatcher 不决定具体 Node；由成员 Volcano 对真实 Pod 完成准入与绑定 |
+| `owner`、生效范围 | 服务维护者及平台资源治理配置 | 配置变更产生新版本，已放行的 grant 保留原版本用于对账，禁止无记录地重新解释历史资源请求 |
+
+**取得 NPU 需求的时间与可行模式**：
+
+| 任务形态 | 放行前可见的输入 | 允许的架构行为 |
+|---|---|---|
+| 一个 Runner Service 只对应一种稳定资源规格 | 平台维护的可信 `runnerServiceId → profileVersion` | **目标主路径**：Dispatcher 以 Profile 对目标成员做容量准入，成员执行 Pod 按同规格申请资源 |
+| 多个 Job 共用相同 `runs-on`，但 NPU 数量或多机拓扑不同 | ARC 默认 Runner 扩容/Pod 创建不必携带具体尚未分配的 Job 资源需求 | 只有额外的**可信、放行前可关联的资源需求契约**才能精确预准入；否则不能假装 Dispatcher 已知具体 Job 的 NPU 数量。此关联是针对**资源需求**，与 PL-D05 的 PR/nightly 优先级无关 |
+| 无法在放行前获得可靠的完整需求 | `ProfileUnknown`、服务容量描述缺失或多种需求无法区分 | 不得把 NPU 请求当零；NPU 服务停止肯定容量授予，显式记录等待原因。若改成 Runner 接单后在成员排队，必须单独说明**等待阶段已后移**，不能承诺 Runner 领取前完成排队 |
+
+**成员可行性（D）**：Dispatcher 只选**成员集群**。对 `single-pod`，必须有该成员内一个 Node 可满足 Pod 的全部资源及约束；对 `multi-pod-group`，必须有成员内一组满足各 Pod 请求、拓扑、同一运行环境、`minAvailable` 和完整并发数量要求的节点集合。36 卡是**任务总规模**，不能据此推断存在单台 36 卡 Node，也不能把两处不同成员的碎片拼成一个未经设计的跨成员 Gang。成员 Volcano 通过 PodGroup/Gang 等目标版本原生能力决定具体 Node 与同时启动；Dispatcher 对 Gang 只作**成员层容量估计与许可**，不实现成员节点级 Gang 算法。[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)；[Volcano PodGroup](https://volcano.sh/docs/concepts/podgroup/)。
+
+**资源授予与对账**：Dispatcher 对每个 Runner/Binding UID 记录 `profileVersion`、成员、资源族、各 Pod 请求/拓扑范围、授予状态；在目标 workload/PodGroup 创建后核对实际 Pod resources、数量、调度入口、Group 身份与配置版本。若缺少 PodGroup 或实际资源大于/不同于已准入的规格，标记 `ResourceMismatch`，阻止将此 grant 核销为已成功占用；由成员准入/工作负载控制器**按已定义的拒绝或保持 Pending 机制**处理，并由 Dispatcher 修正之后的成员容量判断。仅有 Dispatcher 的观测告警不能代替真实 Pod 准入保护。任务取消、失效或终态需要按 ARC/成员资源 UID 对账并释放 grant，不能创建第二个 GitHub Job。
+
+**边界与实例**：
+
+| 输入 | Dispatcher 成员准入 | 成员调度 |
+|---|---|---|
+| 单 Pod 请求 16 卡，成员 A 单 Node 最多 8 卡，成员 B 单 Node 有 16 卡 | 选 B；A 聚合空闲卡数即使超过 16 也不可用 | B kube-scheduler/Volcano 选择最终 Node |
+| 某 PR 需要 36 卡、由多 Pod 组成；候选成员 X 的多个节点在指定拓扑内可同时满足全组 | 按**各 Pod 和 PodGroup**评估 X，选择满足整组要求的成员 | X 的 Volcano 根据 Gang/PodGroup 最小运行数量及 Node 约束调度全组 |
+| 两成员分别有一部分 NPU，均不能满足完整的多 Pod 运行要求 | 保留 Binding 并记录 `NoFeasibleCluster`，不能直接跨成员拼接 | 不触发未经设计的跨成员 Gang |
+| 同一 Runner Service 对应不确定的 2 卡和 36 卡 Job | 不能单凭相同 `runs-on` 推断需求；必须先有单一可信 Profile 或资源需求关联契约 | 未经声明不得将 CPU Runner 就绪当作可运行 NPU Job |
+
+**剩余约束**：Profile 产生/生效的接口、是否采用成员 Node/Pod 快照或 Estimator、Volcano 对设备拓扑/Gang 的精确版本支持、工作流模板与运行环境均为后续细化参数；这些未确认不妨碍此设计说明责任与原则，但不能宣称当前 Manifest 已实现。依据：[GitHub ARC Kubernetes mode 与 runner-container-hooks](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Kubernetes Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)、[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)。
 
 ## 4.7 SP-09 跨功能质量与可服务性规格
+
+**场景：** 开发者发现一个 PR 排队很久，运维需要判定任务究竟卡在 GitHub 等待、Dispatcher Hold、Karmada 传播、成员 NPU 节点调度、JIT Secret 准备还是 Runner 注册。每个阶段必须提供明确的状态来源和可追踪标识，才能定位瓶颈及其责任组件。
 
 | 质量属性 | 规定的行为 | 需要确认的部署参数 |
 |---|---|---|
@@ -947,13 +1097,14 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 |---|---|---|
 | Job 排队耗时 | GitHub Job 可获得的 queued/start 时间及 attempt ID | GitHub 的队列包括匹配/容量影响；无法据此精确分解成 ARC 或 Karmada 内部时间 |
 | ARC 需求响应 | Listener 接收可识别的需求事件 → ERS 期望值变化 | 必须使用相同 Runner 服务及事件关联；异步事件丢失时标记未知 |
-| Dispatcher 持有时间 | Binding 首次进入 Dispatcher 队列 → Binding 成功放行 Cluster，均以联邦控制面事件为准 | 与 GitHub Job queued→started 不同；记录资源族、租户、类别、Hold 原因及取消样本 |
+| Dispatcher 持有时间 | Binding 首次进入 Dispatcher 队列 → Binding 成功放行 Cluster，以联邦控制面事件为准 | 与 GitHub Job queued→started 不同；记录资源族、租户、ProfileVersion、单/多 Pod 形态、Hold 原因及取消样本 |
+| Reserve Node 保护开销 | 成员 Node 保护租约有效期 → 释放，按被保护 Node 的完整可调度 NPU 容量记录保护卡时 | 保护卡时与真实 NPU Pod 运行卡时分别统计；多 Node Gang 须记录完整组/部分失败，防止把 Node Taint 当作 2/8 卡精确预留 |
 | 联邦成员放置与传播等待 | Dispatcher 放行 Binding → 目标成员 Runner Pod 出现，分段记录 Work 到达 | 无候选与策略 Hold 不等于 Work 已分发；跨控制面时钟未同步不计算精确差值 |
-| 节点资源等待与启动准备 | 成员 Pod 创建 → `PodScheduled` → 容器准备及 Ready | `PodScheduled=False`/`FailedScheduling` 归于节点资源等待；镜像、Secret、设备初始化另行归因；Pod Ready 不是 GitHub Job 已开始 |
+| 节点资源等待与启动准备 | 成员真实 NPU Pod/PodGroup 创建 → PodGroup 可调度/PodScheduled → 容器 Ready | 多 Pod/Gang 未达 `minAvailable` 的等待要与单 Pod FailedScheduling 区分；镜像、Secret、设备初始化单独归因，Pod Ready 不是 GitHub Job 已开始 |
 | Runner 注册耗时 | Runner 启动/注册相关事件 → GitHub 确认 Runner 可用 | 需要可靠的关联 ID，未暴露事件不能凭推断填数 |
 | 资源回收耗时 | ARC/Karmada 发起删除 → 控制面与成员资源确认消失 | 成员失联时结束时间未知；不可将 API 删除接受时间当作回收完成 |
 
-**容量与并发**：`maxRunners` 仅限制对应 Scale Set 的 Runner 数量，不是 NPU 卡数上限，也不承诺所有 Runner 均已注册或可调度。当前 `minRunners=0/maxRunners=5` 是 Manifest 示例；Runner 的 NPU 请求数量、成员可用节点、硬件兼容性、JIT/镜像准备能力及 GitHub/ARC/Karmada 控制面吞吐均可能进一步收紧有效并发。对独立 Pod，`Divided/Weighted` 不提供跨 Pod 原子容量预留。计算有效可执行容量时，必须同时满足服务上限、成员授权、**单节点完整资源可放置性**和运行环境约束，而不是简单汇总各成员空闲卡数。具体吞吐预测、排队分位数和容量水位待业务 SLO 与实际资源模型确定（P）。
+**容量与并发**：Profile 需要区分单 Pod 完整节点需求与多 Pod 同成员 Gang 需求；ResourceMismatch 不得核销为正常执行。`maxRunners` 仅限制对应 Scale Set 的 Runner 数量，不是 NPU 卡数上限，也不承诺所有 Runner 均已注册或可调度。当前 `minRunners=0/maxRunners=5` 是 Manifest 示例；Runner 的 NPU 请求数量、成员可用节点、硬件兼容性、JIT/镜像准备能力及 GitHub/ARC/Karmada 控制面吞吐均可能进一步收紧有效并发。对独立 Pod，`Divided/Weighted` 不提供跨 Pod 原子容量预留。计算有效可执行容量时，必须同时满足服务上限、成员授权、**单 Pod 单节点 / 多 Pod 整组同成员资源与拓扑可放置性**和运行环境约束，而不是简单汇总各成员空闲卡数。具体吞吐预测、排队分位数和容量水位待业务 SLO 与实际资源模型确定（P）。
 
 **设计验证准则**：应能将一项 Job 分解为可定位的等待阶段，区别需求已收到/成员已选定/Pod 已启动/Runner 已注册；在 `maxRunners` 达上限、节点碎片化、镜像准备慢、JIT 晚到时均能指出限制点，不宣称未核准的性能阈值。
 
@@ -969,7 +1120,7 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 | Token/CA/RBAC 出错 | 控制面操作失败或权限风险 | 分类 DNS/TLS/401/403，恢复最小授权身份及可信链 | 不能通过关闭 TLS 或升级为管理员权限绕过 |
 | 状态聚合错误/延迟 | ARC 可能错误理解 Pod 状态 | 以成员真实状态与唯一目标对象核查；无法判断则 Unknown | 现有 Lua 首个非空来源不能证明多来源安全 |
 
-**故障隔离原则**：一个成员失效不意味着联邦整体立即失效，但需要可用的管理面、合格的其他成员和上游正常调谐，才能主张新的 Runner 可在其他成员执行。**正在执行的 Job 不承诺跨成员无损迁移**。未确认业务幂等性时禁止集成层自行重派 Job。可靠性设计遵循 T3 的 LC 约束、T4 的 SEC 约束、T6 的 FMEA；恢复时间、冗余副本数和可用性 SLO 均为待定参数，不冒充现有保证。
+**故障隔离：** 成员失联时，其他成员能否承接新 Runner 取决于管理面、成员资格及可用容量。运行中的 Job 不具备跨成员无损迁移保证；在确认业务幂等性之前，集成层不得自行重派 Job。恢复时间、冗余规模及可用性目标仍需明确。
 
 ### 4.7.3 跨组件诊断契约
 
@@ -979,8 +1130,8 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 |---|---|---|
 | Job 匹配与排队 | GitHub Job、Scale Set | 无匹配、无授权、容量限制、GitHub API 错误 |
 | Runner 需求/创建 | Listener、ERS/ER、ARC Controller 事件 | 需求未见、期望与实际数量差、Pod/JIT 创建失败 |
-| Dispatcher Hold 与联邦放置 | 队列时间/Policy、ResourceBinding/grant、Work | 无合格成员、Group Hold、ReserveForHead、CapacityUnknown、Backfill、放行冲突和成员同步失败 |
-| 节点与依赖准备 | 成员 Node/Pod/Secret 事件 | FailedScheduling、FailedMount、ErrImagePull、设备资源不足 |
+| Dispatcher Hold 与联邦放置 | 队列时间/Policy、ResourceBinding/grant、Work、Node Taint/租约 | 无合格成员、Group Hold、ReserveForHead、ReservationPartial、容量未知、Backfill、放行冲突、保护开销及成员同步失败 |
+| 节点与依赖准备 | 成员 Node/Pod/PodGroup/Secret 事件 | ProfileUnknown、ResourceMismatch、Gang Unschedulable、FailedScheduling、FailedMount、ErrImagePull、设备资源不足 |
 | Runner 注册与执行 | ARC Runner 与 GitHub Job | 注册失败、Pod Ready 但 GitHub 未确认、Job 中断/完成 |
 | 状态与回收 | 成员 Pod.status、控制面聚合、Work/Finalizer | 状态缺失/过期/多来源冲突、删除未知或残留 |
 
@@ -990,12 +1141,12 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 
 **官方机制依据**：[GitHub ARC runner scale-set 容量配置](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Kubernetes Scheduling Framework](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/)、[Pod Conditions](https://kubernetes.io/docs/concepts/workloads/pods/pod-condition/)。上游分别约束 Runner 规模及节点调度/状态语义，**不构成 ARC + Karmada 整体性能或故障切换承诺**。
 
-F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复和责任。未确认的性能、设备、安全参数标待定，不编造数值。
+F-01～F-06 的接口和质量约束由 SP-01～SP-09 统一规定；故障影响、检测与恢复责任见各功能的 DFX 分析。
 
 
 ### 4.7.4 DFX 场景—架构机制—设计验证矩阵
 
-本节描述**可静态评审的架构响应**。不将未批准的故障检测、重试、数据保留或性能分位数填写为既成数值。质量指标的目标值仍由 SR-NF 与 P-SR 参数批准后约束。
+质量属性要求与性能阈值分别由 SR-NF 和 P-SR 定义；待批准参数在对应表格中明确标记。
 
 | 场景/质量属性 | 刺激与环境 | 架构响应与负责组件 | 设计判据、残余风险与追踪 |
 |---|---|---|---|
@@ -1009,28 +1160,30 @@ F-01～F-06 遵守 SP-01～SP-09。FMEA 写明原因、影响、检测、恢复�
 | QA-08 资源泄漏与故障恢复 | Dispatcher Leader 故障，成员存在仍有效的 reserved Node taint | 新 Leader 对账恢复账本，成员 Janitor 对到期保护按归属清理，恢复互斥放行 | 不得因 Dispatcher 故障永久占有节点；降级需显式宣告公平策略减弱；PL-D03、F03-07/09 |
 | QA-09 资源预留准确性 | 队首获得候选 Node 预留，但真实 workflow Pod 最终绑定另一个 Node | 由成员 Scheduler 选真实 Node，Dispatcher 观察 PodScheduled 后核对、迁移或释放保护记录 | 不能把 reserved Node 误记作 NPU 已占用或队首已兑现；PL-D02/D03、F03-08 |
 | QA-10 公平性正确性 | 相同权重甲租户运行 16 卡×1 h，乙运行 2 卡×1 h | PL-D04 按同资源族 NPU 卡时计算服务量，分别扣除未落地 grant，公平选择下一候选 | Job 数相同不等于公平；异构 NPU 家族不可直接合并；F03-10 |
-| QA-11 成员任务优先级 | 相同 runs-on 的 PR/nightly 已经在同一成员创建实际 NPU Pod；nightly Pod 指定较低 PriorityClass | PL-D05 要求 Volcano Priority Plugin 识别 NPU Pod priorityClassName，优先调度符合条件的 PR Pod | 未放行 Binding 不受成员 PriorityClass 影响；禁用抢占时不驱逐正在运行的 nightly；F03-11 |
+| QA-11 成员任务优先级 | 相同 runs-on 的 PR/nightly 在同一成员创建真实 NPU Pod；nightly 模板使用较低 PriorityClass | PL-D05/4.3.8.1：nightly 工作负载或可信 hooks 在**实际 NPU Pod**声明低优先级，Volcano 排序 | 同一个静态 Hook 模板无法自动区分 PR/nightly；不能驱逐已经运行的 nightly；F03-11 |
 | QA-12 故障降级互斥性 | Dispatcher 仍续约 Leader Lease，但决策循环已停止；应急实例准备接管 | PL-D06 检测真实调度进度；确认旧 Writer 停止后才可 DEGRADED，否则 FAIL_CLOSED | 不允许双写、旧资源预留被忽略或 Job 重复分发；F03-12/13 |
+| QA-13 NPU 需求先验正确性 | 相同 Runner Service 接受 2 卡或 36 卡不同请求，Runner Pod 只申请 CPU | PL-D07 要求可信服务 Profile 或放行前资源需求关联；无法知道完整 NPU 需求时产生 ProfileUnknown，不按零卡肯定放行 | 不把 CPU Runner Ready 视为 NPU 成员容量保证；F06-04/06、SR-06-01/03 |
+| QA-14 多节点 Gang 可行性 | 总共需要 36 卡的多 Pod 工作负载，某成员聚合卡数充足但节点间拓扑不满足完整请求 | Dispatcher 判断**同成员整组**资源与拓扑可行性；成员 Volcano PodGroup/Gang 做最终 Node 调度；不足时保持不可调度 | 不要求单个 36 卡 Node，也不允许跨独立成员拼接 Gang；F06-05、SR-06-02 |
+| QA-15 保护粒度与回填安全 | 8 卡 Node 为 2 卡任务保护，剩余 6 卡表面空闲 | PL-18：Node NoSchedule 以整 Node 阻止普通新 Pod；Dispatcher 只在其他未保护 Node 上 Backfill，并记录保护卡时开销 | Taint 不等于卡级预约，不能把 6 卡视作可安全回填或已运行卡时；F03-14 |
+| QA-16 Gang 预留失败恢复 | Dispatcher 为多 Pod Gang 保护 3 台 Node，第 3 台失败，Leader 随后失联 | PL-19：整组 ReservationPartial，按身份/租约回滚已保护 Node；新 Leader 和 Janitor 对账清理 | 不宣称部分成功即完整保护；不能清理其他调度器的 Taint；F03-15/16 |
 
 **可评审性门槛**：PL-D03～06 明确联邦 FIFO/Reserve/Backfill、跨租户公平、成员 Volcano PriorityClass 与降级设计，**当前 Manifest 不包含 Dispatcher 和 NPU 优先级模板**。后续必须对照实际 NPU Pod、Volcano Scheduler 插件及调度动作确认；不再要求 PR/nightly 放行前 Job→Runner→Binding 关联。设计不证明端到端排队 SLA。
 
 # 5 功能实现设计
 
-> 各功能保留时序、接口和 FMEA/DFX；共享规格见第 4 章。Kubernetes 原生资源遵循对应 OpenAPI；ARC/Karmada 自定义资源遵循 CRD Schema。未新增 REST API，不编造 Swagger Endpoint。
->
-> US-01～US-08 时序图及异常场景均为设计，不是实测调用记录；上游行为以目标版本文档为准。
->
-> FMEA 仅作定性分析；风险评分标准未批准，不填数值。
+Kubernetes 资源接口遵循其 OpenAPI，ARC/Karmada 的自定义资源遵循目标版本 CRD。功能时序和接口表分别说明各组件之间的状态与操作契约。
 
 ### DFX 风险判定与设计验证规则
 
-本章对全部功能使用统一的**定性 FMEA**，风险等级是设计评审优先级，**不是测得的故障概率或正式 RPN**：**严重**＝长期管理凭证错误传播、越权修改联邦资源或错误确认执行；**高**＝任务中断、重复执行风险、凭证失效或资源清理无法确认；**中**＝局部排队、暂时 Pending、可恢复的单功能异常。等级按潜在影响与可隔离性保守判定；不虚构概率、检测率或分数。风险高低不能仅凭恢复流程是否存在而自动下降。
+FMEA 按失效后果进行定性分级：**严重**＝长期管理凭证错误传播、越权修改联邦资源或错误确认执行；**高**＝任务中断、重复执行风险、凭证失效或资源清理无法确认；**中**＝局部排队、暂时 Pending、可恢复的单功能异常。等级依据影响和隔离能力判定；未经实际评估不填写故障概率或 RPN。恢复措施存在不意味着风险自动降低。
 
 每条 FMEA 追加**设计措施 → 设计验证准则 → 剩余风险**。验证是通过设计文档/API 契约检查可判定的条件，不表示已运行测试或实际验证成功。**设计被接受**与**当前 Manifest 已满足**分别记录；涉及未落实的调度策略、权限或接口，必须标记差距。正式性能 SLO 和数据保留期不在此补写数值。
 
 Kubernetes 关于 [RBAC 最小权限](https://kubernetes.io/docs/concepts/security/rbac-good-practices/)、[ServiceAccount](https://kubernetes.io/docs/concepts/security/service-accounts/) 及 Karmada [状态解释与聚合接口](https://karmada.io/docs/userguide/globalview/customizing-resource-interpreter/) 是风险控制的上游依据。
 
 ## 5.1 F-01 统一 Runner 服务入口
+
+**典型场景：** vLLM 开发者只在 Workflow 中选择统一的 Runner 标签。平台在后台调整可执行成员，开发者不需要修改工作流。
 
 ### 5.1.1 功能概述
 
@@ -1075,6 +1228,10 @@ sequenceDiagram
     Note over GH,L: 此处代表一个 Scale Set 的 Listener 会话，不限制其他 Scale Set
 ```
 
+<p align="center">图 5-1-1 统一 Runner 服务提交主路径</p>
+
+说明：开发者继续使用统一 runs-on 标签，成员选择对工作流透明。
+
 
 
 ### 5.1.5 用户接口设计
@@ -1090,7 +1247,7 @@ sequenceDiagram
 | 工作流使用者与 GitHub Actions | GitHub Actions Workflow：`jobs.<job>.runs-on` | 开发者必须填写已发布的 Runner 服务名称。GitHub 根据该名称匹配 Runner。 | 开发者必须具有目标仓库工作流的提交权限。 | 名称未匹配时，GitHub 按其队列机制处理；平台不得改写标签。 | ARC-1；SP-01 |
 | 平台配置与 ARC Controller | `AutoscalingRunnerSet`：`actions.github.com/v1alpha1` | 管理员必须配置服务名称、GitHub 目标、凭证引用、Runner 数量范围和 Pod 模板。 | Controller 必须具备所需的 Kubernetes API 与 GitHub 目标权限。 | API 拒绝创建或更新时，必须保留资源名称和错误原因；不能自行扩大权限。 | ARC-2；SP-01 |
 
-**开发交付边界**：开发人员应维护 Runner Scale Set 模板与服务名称配置。不新增用于代替 GitHub Job Queue 的接口。
+**配置责任：** 平台维护 Runner Scale Set 模板及服务名称；Job 匹配和队列由 GitHub 管理。
 
 ### 5.1.9 DFX分析
 
@@ -1113,6 +1270,8 @@ sequenceDiagram
 **运行诊断与敏感信息处理**：运维人员应先比较 `runs-on`、Runner Scale Set 名称和 GitHub 配置，再分析身份认证错误。审计不得记录 GitHub 管理凭证。
 
 ## 5.2 F-02 Runner 弹性供给及临时资源回收
+
+**典型场景：** PR 高峰到来时，ARC 根据需求增减临时 Runner；任务结束后，Runner、关联 Pod 与 JIT 凭证逐步回收，避免空闲资源被长期占用。
 
 ### 5.2.1 功能概述
 
@@ -1164,6 +1323,10 @@ sequenceDiagram
     Note over C,K: ARC 和 Karmada 异步回收按各自所有权处理，残留 Finalizer 需独立治理
 ```
 
+<p align="center">图 5-2-1 Runner 弹性创建主路径</p>
+
+说明：GitHub/ARC 负责 Runner 供给，Karmada 在目标成员传播 Runner 对象。
+
 
 
 #### 5.2.4.2 UC-04 Job 结束回收 Runner 与凭证——运行时序（US-07）
@@ -1200,6 +1363,10 @@ sequenceDiagram
     Note over ARC,Member: 删除按各控制器异步调谐完成，不代表所有历史对象零残留
 ```
 
+<p align="center">图 5-2-2 Runner 与临时依赖回收</p>
+
+说明：Job 结果、Pod 删除和凭证清理分别由相应权威组件确认。
+
 
 
 #### 5.2.4.3 生命周期回收契约和异常时序
@@ -1222,6 +1389,10 @@ sequenceDiagram
   end
   Note over G,M: 不以 Job 完成推断跨成员删除原子完成；不自行重新派发 Job
 ```
+
+<p align="center">图 5-2-3 Runner 生命周期异常恢复</p>
+
+说明：异常恢复不代表同一个 GitHub Job 可以安全重复执行。
 
 | 触发 | 应核对的事实 | 恢复责任 |
 |---|---|---|
@@ -1246,7 +1417,7 @@ sequenceDiagram
 | ARC Controller 与 Karmada API | `EphemeralRunner`、`Pod` 和 JIT Secret | ARC 创建临时 Runner 对象、Runner Pod 和注册所需的临时 Secret。 | Controller 必须有权管理所在命名空间的对应资源。 | 对象创建失败时记录资源类型和 API 错误，不得报告不存在的 Runner 已注册。 | ARC-1；SP-07 |
 | ARC/Karmada 与成员 Kubernetes | Runner Pod、JIT Secret、`ResourceBinding`、`Work` | ARC 按官方生命周期删除临时 Runner，Karmada 调谐被传播对象的删除。 | 每个控制器只能依据其资源所有权处理相关对象。 | 删除未完成时保留对象 UID、Finalizer 和错误，不得清除未知 Finalizer。 | ARC-1、KAR-1；SP-07 |
 
-**开发交付边界**：开发人员维护 Runner Scale Set 配置、资源关联和必要权限；动态 Runner 的创建与回收由 ARC 的官方控制器完成。
+**配置责任：** 平台维护 Runner Scale Set 及资源权限；ARC 管理动态 Runner 的创建和回收。
 
 ### 5.2.9 DFX分析
 
@@ -1271,6 +1442,8 @@ sequenceDiagram
 **运行诊断与敏感信息处理**：使用 GitHub Run、临时 Runner、Runner Pod UID、JIT Secret 和 Binding/Work 追踪同一次任务。Finalizer 阻止删除时，必须先确认设置它的控制器。
 
 ## 5.3 F-03 Runner 联邦成员调度与依赖传播
+
+**典型场景：** 当 vLLM 本地资源紧张而 vLLM-Omni 仍有合格容量时，Dispatcher 决定是否放行并选择成员，Karmada 将 Runner Pod 和其引用的 JIT Secret 传播到该成员。
 
 ### 5.3.1 功能概述
 
@@ -1334,6 +1507,10 @@ sequenceDiagram
     Note over K,M: Dispatcher 选成员及放行，成员 Scheduler 选 NPU Node
 ```
 
+<p align="center">图 5-3-1 Dispatcher 选择成员并放行 Runner</p>
+
+说明：联邦容量判断发生在成员传播前，不替代 Node/Gang 调度。
+
 
 #### 5.3.4.2 UC-06 JIT Secret 晚到后的依赖恢复——运行时序（US-04）
 
@@ -1371,6 +1548,10 @@ sequenceDiagram
     Note over API,Pod: 凭证与 Pod 共置于选定成员，任务结束后的回收见 US-07
 ```
 
+<p align="center">图 5-3-2 JIT Secret 延迟传播与恢复</p>
+
+说明：JIT Secret 未到达时，不得判定 Runner 已具备执行条件。
+
 
 
 #### 5.3.4.3 UC-10 成员不可用——异常运行时序
@@ -1396,6 +1577,10 @@ sequenceDiagram
     end
 ```
 
+<p align="center">图 5-3-3 成员失联诊断路径</p>
+
+说明：成员失联不自动触发运行中 GitHub Job 的迁移或重复派发。
+
 **异常约束**：不得将成员失联等价于 GitHub Job 已失败或可安全重复执行；设计仅保证可诊断的异常状态和责任边界。
 
 ### 5.3.5 用户接口设计
@@ -1412,7 +1597,7 @@ sequenceDiagram
 | 平台配置与 Karmada | `PropagationPolicy`：`policy.karmada.io/v1alpha1` | 平台必须设置资源匹配条件、成员候选范围和依赖传播规则。 | 策略维护者只能操作授权范围内的命名空间及成员。 | 策略不匹配或没有合格成员时，保留调度原因，不得默默选择其他租户成员。 | KAR-1、KAR-2；SP-02、SP-03 |
 | Karmada 与成员 Kubernetes | `ResourceBinding`、`Work` 及成员对象 | Karmada 将选定 Runner Pod 和它引用的运行依赖分发到指定成员。 | Karmada 必须持有已注册成员的 API 访问身份。 | 成员不可达或资源发生冲突时，按上游调谐语义处理，不强制覆盖其他管理者的对象。 | KAR-1、KAR-2；SP-02 |
 
-**开发交付边界**：开发人员维护 `PropagationPolicy` 及关联权限，并检查目标 Runner Pod 被选中、非目标 Pod 不被选中。不得将 GitHub Job 重新派发作为 Karmada 对象传播失败的默认恢复动作。
+**配置责任：** 平台维护 `PropagationPolicy` 及授权范围，限制其只匹配目标 Runner Pod；Karmada 传播失败不得直接触发 GitHub Job 重派。
 
 ### 5.3.7 调度正确性约束
 
@@ -1423,7 +1608,7 @@ sequenceDiagram
 | PL-03 | 传播完成 ≠ 节点成功调度 ≠ Runner 已注册 ≠ Job 成功 | 分别使用 Karmada、成员 K8s、ARC/GitHub 事实判定 |
 | PL-04 | 单个 Runner Pod 不能通过聚合多个节点/成员空闲量证明满足完整资源请求 | 容量碎片化仍可能导致 Pending；保留诊断状态 |
 | PL-05 | 独立 Pod 的 `Divided/Weighted` 不构成跨 Pod 比例、NPU 预留或调度公平保证 | 不在设计或验收中使用无依据的成功率/均衡性承诺 |
-| PL-06 | 成员不可达或 Pod 未就绪不得触发未经去重证明的 GitHub Job 重派 | 只按上游生命周期和后续 T3 约束处理 |
+| PL-06 | 成员不可达或 Pod 未就绪不得触发未经去重证明的 GitHub Job 重派 | 只按上游生命周期和第 4.5 节的状态约束处理 |
 | PL-07 | Dispatcher 只能选择成员；需要可靠的单节点可放置容量信号，但不得把估算节点视为已经绑定的 NPU Pod | A 单节点最多 8 卡、B 单节点 16 卡时，16 卡工作流选 B 成员；由 B 的 kube-scheduler/Volcano 决定 Node；见 PL-D02 |
 | PL-08 | Dispatcher 的未落地容量授予与节点预留须持续对账；实际 NPU 分配以成员工作流 Pod 的节点绑定及 kubelet 事实为准 | 两个 Runner 不得共用同一份预估空闲容量；预留 Node taint 不等于 workflow Pod 必定绑定该节点；见 PL-D02 |
 | PL-09 | Dispatcher 仅按队列身份、可信租户与成员授权对 Binding Hold/Release | GitHub Job 排队与 Binding Hold 不同；PR/nightly 优先级仅在成员 NPU Pod 生效 |
@@ -1432,11 +1617,13 @@ sequenceDiagram
 | PL-12 | Dispatcher 重启或切主后必须重建队列及账本；Binding 写者互斥，租约具备失效清理 | 两个 Leader 不得同时放行；Dispatcher 退出不能使 Node 永久被 taint |
 | PL-13 | Dispatcher 不处理 PR/nightly 类别、分时窗口或 PriorityClass；只管理联邦公平和队首保护 | nightly 低优先级由真实 NPU Pod 声明；不得把成员的优先级当作 Binding 放行优先级 |
 | PL-14 | 跨租户按同一资源族的 NPU 卡时和批准权重仲裁；未落地授予与已完成服务分开计量 | 16 卡×1 小时与 2 卡×1 小时不能视为相同服务；PL-D04 |
-| PL-15 | nightly NPU Pod 应携带低优先级 priorityClassName，由成员 Volcano 排序；不允许不受控抢占 | 只有 CPU Runner Pod 配置 PriorityClass、实际 NPU workflow Pod 未配置时不满足目标；PL-D05 |
+| PL-15 | nightly 实际 NPU Pod/VolcanoJob 声明低优先级，由成员 Volcano 排序，未经授权不可升权且不得抢占运行中的 Job | 同一 runs-on 的静态 Hook 模板不能凭空区分 PR/nightly；CPU Runner Pod 设置类不等于 NPU Pod 生效；PL-D05 |
 | PL-16 | 应急调度接管前必须确认原 Binding Writer 失效 | 决策停止但进程仍续约不能判定 Dispatcher 健康；PL-D06 |
 | PL-17 | 切主先对账持久化 grant、Node 预留及实际 NPU Pod；未知容量停止放行 | 空账本不是节点空闲；应急和 Dispatcher 不能双写；PL-D06 |
+| PL-18 | Node `NoSchedule` 只阻止不容忍该 Taint 的**新 Pod 调度**，保护粒度是整个 Node 而非指定 NPU 卡数 | 8 卡 Node 为队首 2 卡任务保留时，剩余 6 卡不得按普通 Backfill 复用；计入整节点保护开销；见 4.3.6.1 |
+| PL-19 | 多节点 Gang 的候选 Node 保护按同成员整组授权、版本、租期对账；部分写入失败不可宣布完整预留 | 3 台 Node 有 1 台保护失败时标记 ReservationPartial 并安全回滚；同组 Pod 要有精确 Toleration；见 4.3.6.1 |
 
-**设计级验收边界**：PL-07～17 为目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义两级放置；PL-D03 定义 FIFO/Reserve/Backfill；PL-D04 定义公平计量；PL-D05 定义成员 Volcano Pod PriorityClass；PL-D06 定义故障降级。PriorityClass 相对顺序、Volcano 动作、权重及故障阈值为 P 类；不宣称跨集群 PR 优先、原子资源预约或无损切换。
+**设计级验收边界**：PL-07～19 为目标约束，当前 Manifest 没有 Dispatcher。PL-D02 定义两级放置；PL-D03 定义 FIFO/Reserve/Backfill；PL-D04 定义公平计量；PL-D05 定义成员 Volcano Pod PriorityClass；PL-D06 定义故障降级。PriorityClass 相对顺序、Volcano 动作、权重及故障阈值为 P 类；不宣称跨集群 PR 优先、原子资源预约或无损切换。
 
 ### 5.3.9 DFX分析
 
@@ -1456,9 +1643,12 @@ sequenceDiagram
 | F03-08 | 回填任务持有过宽 Toleration 或同组未被 Hold。 | 后继任务占用队首保护容量，FIFO 承诺失效。 | 对照 Runner group、Node taint、workflow Pod 的实际 NodeName。 | 仅精确 Equal 容忍，同组后继 Hold；错误保护须告警并恢复。 | Dispatcher/成员调度维护者 |
 | F03-09 | 两个 Dispatcher 实例或降级调度器同时放行 Binding。 | 重复分发或队列顺序不可信。 | Leader Lease、Binding resourceVersion、放行决策记录。 | 只保留单写者；完成状态恢复后才放行，接管与降级互斥。 | Dispatcher/联邦控制面维护者 |
 | F03-10 | 跨租户按 Job 数而非 NPU 卡时排序，或窗口计量遗漏已运行任务。 | 高耗资源租户长期占优，公平目标失效。 | 比对租户 NPU Pod 卡时、权重、grant 和仲裁决策。 | 按 PL-D04 在同资源族使用实际分配卡时加权仲裁；数据未知则不宣称公平保证。 | Dispatcher 公平策略维护者 |
-| F03-11 | nightly 低优先级未传到实际 NPU Pod，或 Volcano 调度未启用 Priority Plugin。 | 同成员 PR/nightly 等待顺序未受预期优先级控制。 | 检查实际 NPU Pod 的 priorityClassName、schedulerName、PodScheduled 及 Volcano 插件/动作配置。 | PL-D05：在 workflow Pod 而非仅 CPU Runner Pod 设置优先级；校验 Volcano Priority Plugin，禁止不受控抢占。 | 成员调度/工作流模板维护者 |
+| F03-11 | nightly 低优先级未传到实际 NPU Pod，或共享 Runner 的静态 Hook 模板未区分类别。 | 成员 PR/nightly 等待顺序无效，或任务被错误升权。 | 对比实际 Pod/PodGroup priorityClassName、提交身份、schedulerName 和 Volcano 插件配置。 | PL-D05：nightly 负载模板设置低优先级，校验准入授权与 Priority Plugin，禁用不受控抢占。 | 成员调度/工作流模板维护者 |
 | F03-12 | Dispatcher 租约续约但决策停滞，Watchdog 只看 Lease。 | 全部新增任务长期 Hold。 | 最后成功决策循环、采集新鲜度、放行进度与 Lease 差异。 | PL-D06：独立进度健康检查，进入 RECOVERING/安全降级或 FAIL_CLOSED。 | Dispatcher/Watchdog 维护者 |
 | F03-13 | 网络分区造成旧 Dispatcher 与应急 Scheduler 双写。 | Binding 目标冲突或重复传播，资源账本错误。 | 写者身份、进度与 Binding 版本/目标事件。 | PL-D06：证明旧 Writer 失效后才接管；无法排他就 FAIL_CLOSED。 | 联邦控制面维护者 |
+| F03-14 | 将 Node NoSchedule 误当作 NPU 2/8 卡精确预留 | 后继任务错误 Backfill，破坏队首保护或统计虚高 | Node Taint、候选 Pod、资源账本与实际 Node allocatable 对照 | PL-18：整 Node 保护、整 Node 开销计量；禁止卡级余量的无证据回填 | Dispatcher/成员调度维护者 |
+| F03-15 | 多节点 Gang Node 预留只完成部分节点，仍宣布成功 | 队首工作负载无法同时启动，部分节点长期闲置 | 预留组中所有 Node 版本、租约、实际 Taint 与 PodGroup 状态 | PL-19：标记 ReservationPartial，按归属回滚或安全重试后才宣布整组保护 | Reservation Actuator/成员调度维护者 |
+| F03-16 | 不可信 Pod 使用宽泛容忍或 nodeName 绕过 Node Taint | 非队首占用保护资源、全局 FIFO 失效 | Node Taint、Pod Toleration、Pod nodeName 和提交身份 | 成员 admission 限定组权限与 PodSpec，发现绕过则冻结相关成员的新容量放行 | 成员 API 准入/Dispatcher 维护者 |
 
 **风险—措施—验证追踪**（关联：SR-03-01、SR-03-02、SR-NF-02/03；延续上方 FMEA 编号，不替代已有故障表）
 
@@ -1474,13 +1664,18 @@ sequenceDiagram
 | F03-08 | 同组后继绕过 Hold、宽泛 toleration 抢占队首 | 预留失效、队首饥饿 | 高 | PL-10/11；仅匹配 group 的 Equal Toleration、同组 Hold、预留违规观察 | 容忍 Exists/未 Hold 均不满足验收；出现非队首占用必须告警 | 与未纳管调度器之间存在共存约束 |
 | F03-09 | 多写者或恢复未对账就放行 | 任务重复传播、账本偏差 | 严重 | PL-12；唯一 Binding 写者、Leader/进度检测、Grant 重建、降级互斥 | 切主前后同 Binding 不能由两个写者放行；未知容量不进入新放行 | Lease 抖动及网络分区导致短时不可用 |
 | F03-10 | 按任务数量轮转而忽略 NPU 卡时与租户权重 | 小任务与大任务被错误等价，公平性失真 | 高 | PL-14、PL-D04：按真实 NPU 工作负载的卡时计量，grant 单独占容量预算 | 16 卡×1h 与 2 卡×1h 获得不同的服务量；跨设备家族分别计算 | 不可放置的大任务与非抢占长任务仍影响短期公平 |
-| F03-11 | nightly NPU Pod 缺少低优先级类或错误调度入口 | PR 在成员 Pod 队列中未按优先级先调度，或发生不预期的抢占 | 高 | PL-15、PL-D05：Pod 创建模板设置 priorityClassName；实际 NPU Pod 使用 Volcano Scheduler，启用 Priority Plugin | 同成员均 Pending 时按 PriorityClass 排序；已运行 nightly 不被策略抢占；与 Dispatcher Hold 分层独立 | 当前 workflow hooks 模板与 Volcano 调度动作是否满足需确认 |
+| F03-11 | nightly NPU Pod 缺少低优先级类，或低优先级被静态模板错误应用至所有共享 Runner | PR 在成员 Pod 队列中未优先执行或被错误降权 | 高 | PL-15/PL-D05：nightly 的真实 NPU Pod/VolcanoJob 指定 PriorityClass，Hook 生成 Pod 需有可信差异化来源；Volcano Priority Plugin 生效，禁用不受控抢占 | 同成员均 Pending 时 PR 在 nightly 前；运行 nightly 不被抢占；无类别输入时不应盲目应用共享模板 | Pod 来源与 Volcano Action 配置需与目标版本核对 |
 | F03-12 | Watchdog 只依据后台 Lease 判活 | Dispatcher 持续 Hold，排队 SLO 失效 | 高 | PL-16、PL-D06：决策进度与主动容量健康检查 | 决策循环停止但续约正常时，进入 RECOVERING/降级状态或 FAIL_CLOSED | 业务恢复阈值仍待批准 |
 | F03-13 | 降级接管时旧 Writer 仍能写 Binding | 多 Cluster 传播及对象身份争用 | 严重 | PL-16/17、PL-D06：接管前确认旧 Writer 已失效，重建 grant，更新版本冲突重查 | 旧 Writer 无法被排他时不进入 DEGRADED；不得并行更新同一 Binding | 网络分区下可用性降低，安全优先 |
+| F03-14 | Node Taint 粒度被误判为卡级资源预留 | Backfill 违反保护、保护开销漏计 | 高 | PL-18；4.3.6.1 明确完整 Node NoSchedule 与受保护卡时独立计量 | 8 卡 Node 保护 2 卡时，剩余 6 卡不能作为普通 Backfill 安全容量 | 整节点保护牺牲短期利用率 |
+| F03-15 | 多 Node 预留部分成功或租约残留 | Gang 无法同时启动、资源闲置 | 高 | PL-19；同成员完整 Node 组版本/租约与失败回滚、Janitor 清理 | 3 台 Node 只保护 2 台时不能宣布完整预留；失败后可按归属释放 | 跨 Node API 无原子提交，竞态保留 |
+| F03-16 | 宽泛 toleration 或直接 nodeName 绕过保护 | 队首保护失效、受保护卡被后继占用 | 严重 | PL-10/18/19；成员 admission 限制组授权，精确容忍并拒绝绕过 | 未授权的 Pod 不能绕过 group 保护；若无法验证应停止声称 Reserve 安全 | 节点已有 Pod 和其他调度器可能仍产生资源竞争 |
 
 **运行诊断与敏感信息处理**：诊断时先查看成员集群的 Ready 状态与 Karmada Binding/Work，再检查成员 Pod 事件和 Secret 引用。日志不得保存 Secret 数据。
 
 ## 5.4 F-04 Listener 跨控制面认证与访问
+
+**典型场景：** Listener 在成员集群运行，却要修改统一 Karmada 控制面内的 Runner 期望状态。身份或证书配置失效会导致 Runner 无法按 Job 需求扩容。
 
 ### 5.4.1 功能概述
 
@@ -1534,6 +1729,10 @@ sequenceDiagram
     Note over L,ERS: 跨控制面身份及配置 Secret 更新语义须在集成设计中明确
 ```
 
+<p align="center">图 5-4-1 Listener 跨控制面访问</p>
+
+说明：TLS、认证、RBAC 权限各有明确控制面与错误归属。
+
 
 
 #### 5.4.4.2 UC-11 令牌轮换、权限拒绝和撤销——异常时序
@@ -1559,6 +1758,10 @@ sequenceDiagram
   Note over I,A: Token/CA 的容器重新加载方式为实施时必须确认的契约，不能推定普通 Secret 自动续期
 ```
 
+<p align="center">图 5-4-2 控制面访问及凭证异常恢复</p>
+
+说明：区分网络、证书、认证、授权和凭证撤销。
+
 | 情况 | 错误归属 | 设计恢复动作 | 禁止行为 |
 |---|---|---|---|
 | DNS/TCP/路由失败 | 网络连通性 | 恢复控制面可达，保留目标地址和错误分类 | 不转向未经验证 API |
@@ -1568,7 +1771,7 @@ sequenceDiagram
 | Secret 副本留存/成员失联 | 传播与回收状态未知 | 记录目标成员及副本 UID；恢复后核对，并独立检查远端凭证撤销 | 不宣称删除控制面 Secret 即完成全域撤销 |
 | 更新 Secret 但 Listener 仍用旧 Token | 凭证加载机制 | 定义可检查的新凭证加载/Listener 重启流程 | 不把 Secret resourceVersion 变化当成轮换成功 |
 
-**接口检查**：应记录 Caller 身份、目标资源及操作、请求结果、失败类别、凭证非敏感版本和观测时间。原则上仅记录不含敏感信息的可追踪标识。对当前 `03-rbac.yaml` 的 `ephemeralrunners` 授权范围及 Controller admin kubeconfig，必须标为生产目标权限整改点；不能通过本次文档更新宣布配置已整改。
+**接口审计：** 记录调用身份、目标资源与操作、请求结果、失败类别、非敏感凭证版本及观测时间。`03-rbac.yaml` 中的 `ephemeralrunners` 权限以及 Controller 的管理员 kubeconfig 仍需收敛到最小授权。
 
 ### 5.4.5 用户接口设计
 
@@ -1584,7 +1787,7 @@ sequenceDiagram
 | 部署与密钥管理系统和 Listener Pod | Listener 模板、Secret 或受控凭证投射卷 | 部署方必须提供 CA、Token、有效期及 API 连接信息，并明确更新后的加载方式。 | 凭证应以只读方式提供给需要的容器，禁止出现在日志中。 | Token 到期或未加载时，必须报告身份状态；不得假定修改 Secret 后立即生效。 | SP-04、SP-05 |
 | 安全管理员与 Kubernetes RBAC | `Role`、`RoleBinding` | 对指定 `EphemeralRunnerSet` 授予所需 `patch` 权限，对必要的 `EphemeralRunner` 资源授予对应读写和状态权限。 | 必须确认 ServiceAccount 命名空间、绑定对象以及操作范围。 | RBAC 配置与契约不一致时，应修正 Role/Binding；不得赋予 `cluster-admin`。 | K8S-2；SP-05 |
 
-**开发交付边界**：开发人员维护 ServiceAccount、Role/RoleBinding、Listener 模板和证书/令牌加载配置。Token 的到期处理和重新加载方式必须在部署方案中确定。
+**配置责任：** 身份管理方负责 ServiceAccount、RBAC、Listener 访问地址、证书和 Token 更新机制。
 
 ### 5.4.9 DFX分析
 
@@ -1610,6 +1813,8 @@ sequenceDiagram
 **运行诊断与敏感信息处理**：平台必须分开记录网络连接错误、证书校验错误、HTTP 401 与 HTTP 403。出现权限失败时，不能通过关闭 TLS 或授予 `cluster-admin` 来绕过。
 
 ## 5.5 F-05 Runner Pod 状态反馈与一致性
+
+**典型场景：** Runner 在远端成员已经启动，但管理面仍显示 Pending；或者成员失联而管理面保留旧 Ready。状态解释必须区分真实成员状态与缓存、过期或冲突状态。
 
 ### 5.5.1 功能概述
 
@@ -1659,6 +1864,10 @@ sequenceDiagram
     Note over RI,ARC: 通过 ResourceInterpreterCustomization 声明 Lua 规则，无需修改 Karmada 源码
 ```
 
+<p align="center">图 5-5-1 成员 Pod 状态反馈到 ARC</p>
+
+说明：旧 Ready 不一定代表当前成员可执行，冲突要回到权威来源核对。
+
 
 
 ##### 5.5.4.2 多来源状态聚合及过期状态处理
@@ -1690,7 +1899,7 @@ sequenceDiagram
 | Karmada 状态解释器与控制面 Pod | `ResourceInterpreterCustomization` 的 `AggregateStatus` | Lua 规则必须将单目标成员的必要 Pod 状态字段写入控制面对象。 | 目标对象为 `apiVersion: v1`、`kind: Pod`；来源必须与选定执行成员一致。 | 没有状态时不能伪造 Ready；出现多个状态来源时必须有明确的选择规则。 | KAR-3；SP-06 |
 | ARC Controller 与 Pod 状态 | Kubernetes Pod 读取或监听操作 | ARC 读取 Runner 容器名称、容器状态与 Pod Ready 条件。 | Controller 必须具有读取对应 Pod 的权限。 | 字段缺失时不能假定 Runner 已就绪；必须提供状态与事件诊断。 | ARC-1；SP-06 |
 
-**开发交付边界**：开发人员维护 `ResourceInterpreterCustomization` 中的 Lua 解释规则，并保证目标版本的 ARC 所需字段完整保留。
+**配置责任：** 状态适配组件维护 `ResourceInterpreterCustomization`，保留 ARC 使用的状态字段。
 
 ### 5.5.9 DFX分析
 
@@ -1715,81 +1924,128 @@ sequenceDiagram
 **运行诊断与敏感信息处理**：排障时比较目标成员与控制面 Pod 的 UID、容器状态和 Ready 条件。状态来源发生冲突时必须先确认目标成员，不能静默取第一个来源。
 
 
+
 ## 5.6 F-06 异构 NPU 任务执行资源适配
+
+**典型场景**：vLLM 的一次 CI 可能总计申请约 36 张 NPU 卡。联邦系统必须判断这是一台 Node 上的单 Pod 请求，还是多个 Pod 在同成员内跨节点协同运行；不能仅看 36 卡聚合空闲量。Dispatcher 持有完整资源规格、选择成员，成员 Volcano 负责 PodGroup/Gang 与 NPU Node 调度。
 
 ### 5.6.1 功能概述
 
-**扩展设计，当前无正式核心 SR**：原候选 SR-06-01 未纳入第 2.4 节；关联 UC-07 NPU 工作流节点调度、UC-13 NPU 资源不足，以及 SP-02、SP-08。当前 Manifest 未配置 NPU 扩展资源或 Dispatcher；本节仅规定联邦与成员的**调度职责**，不设计运行时隔离、设备固件或沙箱。
+**正式需求**：IR-05/FT-05、SR-06-01～03；**场景**：UC-07 NPU 工作流执行、UC-13 NPU 资源不足/不一致、UC-14 同成员多节点 Gang；**规格**：SP-02/08、PL-D02/D03/D07。当前 Manifest 尚未定义 NPU Profile、Gang、NPU 资源或 Dispatcher，以下为目标设计约束。
 
-F-06 将 NPU 资源需求对应到**成员集群内实际申请 NPU 的 Pod**，保证联邦层选成员、成员层选 Node、kubelet 与设备插件分配设备。
+F-06 负责将 Runner Service 的预调度 NPU 需求转换为成员容量准入依据，并保证成员实际 NPU Pod/PodGroup 的规格与授予匹配。它不承担设备插件实现、跨成员 Gang 协议或工作负载隔离。
 
 ### 5.6.3 实现思路
 
-**两种工作负载形态必须区分**：在 runner-container-hooks 的 container mode 下，Runner Pod 可以仅使用 CPU，Runner 接收 Job 后 hooks 创建携带 NPU resources 的 workflow Pod；在不使用该模式、Job 直接在 Runner 中执行时，Runner Pod 本身可能需要申请 NPU。Dispatcher 使用声明的需求估算成员容量，但**不以 Runner Pod Ready 证明真实 NPU 已占用**。实际节点放置归成员 kube-scheduler/Volcano，设备分配归 kubelet/Device Plugin。
+**需求声明**：平台 Runner Service 提供可信的 `Resource Profile` 及版本；Dispatcher 以此进行成员级容量判断，绑定到 Runner/Binding UID。**执行资源事实**：在 ARC Kubernetes container mode 中，Runner Pod 可只使用 CPU；Runner 接到 Job 后由 hooks/工作负载控制器在成员创建实际 NPU Pod（或多 Pod 工作负载）；不用 container mode 时，Runner Pod 本身可以申请 NPU。NPU 设备请求必须来自实际 Pod 的 `resources`，不能把 CPU Runner 的 Ready 当作 NPU 资源已占用。
+
+**两种调度形态**：
+
+| 形态 | Dispatcher 决定的范围 | 成员决定的范围 |
+|---|---|---|
+| 单 Pod NPU 工作负载 | 依据 Profile 选择存在完整可放置 Node 的成员，不指定 Node | kube-scheduler/Volcano 对真实 NPU Pod 进行 Filter/Score/Bind |
+| 多 Pod/Gang NPU 工作负载 | 依据 Profile 的 Pod 数量、逐 Pod requests、最小同时运行数和拓扑，选择**整组可行的一个成员**；保护所需的一组候选节点容量 | Volcano 的 PodGroup/Gang 负责同成员各 Pod 的原子调度阶段、节点绑定和 PodGroup 状态；kubelet/Device Plugin 负责节点上设备分配 |
+
+成员 Volcano 的具体调度对象可以是 PodGroup 或 VolcanoJob，须与使用的工作负载控制器和目标版本一致；不能假定 runner-container-hooks 自动创建多机 PodGroup。参考 [Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/) 与 [VolcanoJob](https://volcano.sh/docs/concepts/volcanojob/)。
 
 ### 5.6.4 设计思路
 
-Dispatcher 依据 NPU 需求和成员容量选择 Cluster，放行 Runner Binding；Karmada 负责 Runner Pod/JIT 依赖传播。成员完成 Runner Pod 调度、Job Pod 创建及 NPU Node 绑定；若节点资源不足，保持实际 NPU Pod Pending，向 Dispatcher 提供后续容量与等待诊断，不自动重派 GitHub Job。必须核实 hooks 是否强制 workflow 与 Runner 同节点；存在同节点约束时不得假设 workflow 可独立选 Node。
+Dispatcher 先取得 Runner Service Profile，检查成员授权/设备/拓扑/容量和未落地 grant；符合要求时放行**唯一成员**的 Runner Binding。Karmada Work 传播 Runner 和 JIT，成员工作负载控制器在 Job 到来后创建实际 NPU Pod/PodGroup，成员 Volcano 按 Node 和 Gang 约束调度；实际资源请求与 grant 对账。资源未知、成员不可行或 Profile 不能匹配时，按 PL-D07 保留真实异常，不自造第二个 GitHub Job。若 hooks 把 workflow Pod 固定到 CPU Runner Node，必须遵守该约束或使用受支持的解耦路径。
 
-#### 5.6.4.1 UC-07 请求 NPU Runner 并在兼容节点执行——运行时序（US-08）
+#### 5.6.4.1 UC-07 按 Profile 选择成员并执行 NPU Job——运行时序（US-08）
 
-§§§mermaid
+```mermaid
 sequenceDiagram
     autonumber
-    participant GH as GitHub / ARC
+    participant ARC as GitHub / ARC
+    participant P as Runner Service Profile
     participant D as Dispatcher
-    participant K as Karmada Binding/Work
-    participant MS as 成员 kube-scheduler / Volcano
-    participant R as Runner Pod (通常 CPU)
-    participant W as NPU workflow Pod
-    participant KL as kubelet + Device Plugin
-    GH->>K: 创建 Runner Pod 并形成待放行 Binding
-    D->>D: 排队并按成员资源容量选 Cluster
-    D->>K: 放行 Binding，记录唯一成员
-    K->>MS: 传播 Runner Pod 和 JIT 依赖
-    MS->>R: 选择 Runner Pod 节点并启动
-    GH->>R: Job 分配给已注册 Runner
-    R->>MS: hooks 创建携带 NPU resources 的 workflow Pod
-    MS->>MS: 依据 Node 资源和拓扑 Filter / Score / Bind
-    MS->>W: 绑定实际 NPU Node
-    KL->>KL: kubelet 在 Node 上调用 Device Plugin Allocate
-    KL-->>W: 通过容器运行时暴露设备
-    W-->>GH: 执行 Job 并上报结果
-    Note over D,MS: Dispatcher 选成员/管理预留；成员调度器决定 Node
-§§§
+    participant K as Karmada Binding / Work
+    participant R as 成员 Runner / Hooks
+    participant M as 成员 Volcano / kube-scheduler
+    participant KL as kubelet / NPU Device Plugin
+    ARC->>K: 创建 Runner Pod，形成待调度 Binding
+    D->>P: 获取可信 Profile 与版本
+    P-->>D: 返回真实 NPU Pod 规格
+    D->>D: 校验成员授权/设备/完整可放置性
+    D->>K: 选择一个成员，记录 grant 并放行 Binding
+    K->>R: 传播 Runner Pod 和 JIT Secret
+    ARC->>R: Runner 注册后分配 Job
+    R->>M: 创建真实申请 NPU 的 Pod
+    M->>M: 对 Node 资源、拓扑及优先级过滤并绑定
+    M-->>D: 反馈真实 PodScheduled 与资源规格
+    D->>D: 对账 Profile/grant 与实际 NPU 请求
+    KL->>KL: kubelet 通过 Device Plugin Allocate 分配设备
+    KL-->>R: NPU Pod 运行并返回作业结果
+```
 
-**非 container mode 分支**：若 Job 直接运行在申请 NPU 的 Runner Pod 中，成员调度器直接对该 Runner Pod 完成 NPU Node 绑定；该分支不能假装存在独立 workflow Pod。
+<p align="center">图 5-6-1 可信 NPU Profile 驱动的成员选择与节点调度</p>
 
-#### 5.6.4.2 UC-13 NPU 资源不足——异常运行时序
+说明：Dispatcher 选成员，Volcano 选 Node；Profile 是目标架构输入，不是 ARC 原生 Job 元数据。
 
-§§§mermaid
+#### 5.6.4.2 UC-13 资源不足或规格不一致——异常运行时序
+
+```mermaid
 sequenceDiagram
     autonumber
     participant D as Dispatcher
-    participant K as Karmada
-    participant M as 成员 kube-scheduler / Volcano
-    participant W as 实际 NPU Pod
-    participant Ops as 运维诊断
-    D->>D: 查询成员资源可放置性与预留状态
-    alt 无合格成员
-        Note over D,K: 保留待放行 Binding，分类 NoFeasibleCluster / CapacityUnknown
-    else 已选择成员
-        D->>K: 放行 Runner Binding 至选中 Cluster
-        K-->>M: Runner 到成员，随后实际 NPU Pod 由成员创建
-        M->>M: 检查节点资源与拓扑
-        alt 无可用 NPU Node
-            M-->>W: Pod Pending / FailedScheduling
-            M-->>Ops: 保留 Pod、Node 及设备失败证据
-            Note over D,Ops: Dispatcher 更新后续容量决策；不改变已运行 Job
-        else 节点可放置
-            M-->>W: Bind Node，kubelet/Device Plugin 分配设备
+    participant K as Karmada Binding
+    participant M as 成员 Volcano
+    participant O as 诊断与资源对账
+    D->>D: 比对 Profile/成员资格与容量
+    alt ProfileUnknown 或无合格成员
+        D-->>K: 保持 Binding Hold
+        D-->>O: 记录 ProfileUnknown / NoFeasibleCluster
+    else 成员已放行
+        D->>K: 写入唯一成员和 grant
+        K-->>M: Runner 传播后创建实际 NPU 工作负载
+        alt 实际请求与 Profile 不一致
+            M-->>O: ResourceMismatch，成员拒绝或保持 Pending
+            O-->>D: 不将 grant 核销为已成功执行
+        else 成员 Node/Gang 容量发生竞争
+            M-->>O: FailedScheduling / PodGroup Unschedulable
+            O-->>D: 更新下一次容量判断，保留当前 Job 身份
         end
     end
-§§§
+```
+
+<p align="center">图 5-6-2 Profile 缺失、资源不足和实际请求冲突的处理路径</p>
+
+说明：成员的实际准入保护需有明确的 API 入口；不能仅凭 Dispatcher 的告警阻止不符合规格的 Pod 运行。
+
+#### 5.6.4.3 UC-14 同成员多节点 NPU 协同任务——运行时序（US-09）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as Resource Profile
+    participant D as Dispatcher
+    participant K as Karmada Work
+    participant R as Runner / 工作负载控制器
+    participant V as 成员 Volcano Gang
+    participant N as 成员 NPU Nodes
+    P-->>D: 多 Pod requests / minAvailable / 拓扑约束
+    D->>D: 判断一个成员内整组可放置
+    alt 整组不可行
+        D-->>D: 保留 FIFO 队首并管理候选节点集合预留
+    else 整组可行
+        D->>K: 放行唯一成员，记录整组容量授予
+        K->>R: Runner 进入目标成员
+        R->>V: 提交关联的 NPU Pods 与 PodGroup
+        V->>V: Gang 依据 minAvailable 与资源拓扑调度
+        V->>N: 为每个 Pod 选择 Node 并绑定
+        N-->>D: 上报实际 Pod/PodGroup 容量事实
+        D->>D: 对账并释放未使用的保护
+    end
+```
+
+<p align="center">图 5-6-3 36 卡级多节点工作负载的成员选择与 Gang 调度</p>
+
+说明：36 卡为任务总需求示例，并不意味着单 Node 36 卡；不涉及跨成员 Gang 或强行固定具体 Node。
 
 ### 5.6.5 用户接口设计
 
-开发者通过原有 `runs-on` 选择 NPU 服务，无需指定成员或 Node。运维按 GitHub 排队、Dispatcher Binding hold、成员 NPU Pod Pending 分阶段定位等待。无新增 UI。
+开发者仍使用原有 `runs-on` 选择 Runner Service，不必指定集群或 Node。平台为相同资源规格维护 Profile；若同一 Runner Service 可能接收不同 NPU 数量/拓扑的 Job，则必须具备放行前可信资源描述，否则不得宣称提前完成资源准入。运维可以区分 `ProfileUnknown`、`NoFeasibleCluster`、`ResourceMismatch`、成员 `FailedScheduling` 和 PodGroup `Unschedulable`。
 
 ### 5.6.6 实现接口设计
 
@@ -1797,38 +2053,45 @@ sequenceDiagram
 
 | 交互双方 | 原生接口或资源 | 输入、操作与输出 | 权限与前置条件 | 异常处理与限制 | 依据及规格 |
 |---|---|---|---|---|---|
-| 工作流与 Runner 服务 | GitHub Actions `runs-on`、ARC RunnerSet | 服务类型与实际 NPU 工作负载需求匹配；保持用户标签不变。 | 仓库获得服务授权。 | 无服务时由 GitHub 排队，不自动降级 CPU。 | ARC-1；SP-01、SP-08 |
-| Dispatcher 与 Karmada | Runner `ResourceBinding`、成员资源状态 | Dispatcher 选 Cluster 并放行 Binding；Karmada 分发 Runner Pod 和依赖。 | 单一 Binding 写入者；服务与成员授权一致。 | 无可接纳成员保留等待，不设 NodeName，不重复创建 Job。 | KAR-1；PL-D02 |
-| 成员调度器与实际 NPU Pod | `Pod.spec.containers[].resources`、`Pod.spec.schedulerName`、节点约束 | workflow Pod（或直接执行的 Runner Pod）声明 NPU 扩展资源；成员调度器选 Node。 | 资源名由设备插件发布；hooks 同节点限制已查明。 | FailedScheduling 由成员报告，不以 Karmada 成员放置成功替代 Node 绑定。 | K8S-3；SP-08 |
-| kubelet 与 NPU Device Plugin | Device Plugin API | 在已绑定 Node 上完成设备 Allocate 并向容器暴露设备。 | 设备已注册且健康。 | 设备异常不得移除资源请求或改用 CPU 运行。 | K8S-3；SP-08 |
+| Runner 服务与 Dispatcher | `runs-on`/Scale Set + **平台 Profile 逻辑契约** | 可信服务标识 → Profile 版本、设备资源名、逐 Pod NPU/CPU 请求、拓扑、PodGroup 最小成员数 | Profile 发布者可信，版本可追溯；稳定服务规格或有额外可信资源需求来源 | `ProfileUnknown` 时不按零卡放行；Profile 不是 GitHub/ARC 原生字段 | ARC-1、PL-D07；SR-06-01 |
+| Dispatcher 与 Karmada | Runner `ResourceBinding`、`Work`、grant（逻辑记录） | Profile + 容量事实 → 唯一 Cluster，Binding Hold/Release | 独立 Binding Writer，成员授权/完整资源组可行 | 不设置 NPU Pod 的 `nodeName`，容量预估不是物理原子授予 | KAR-1；PL-D02/D03/D07 |
+| 工作负载控制器与成员 Volcano | 实际 `Pod`、`PodGroup` / `VolcanoJob` | 真实 Pod requests/PodGroup → 成员内 Node 绑定与 Gang 进度 | Profile 相符、调度入口/插件/拓扑可用；工作负载控制器负责创建对象 | hooks 并不自动保证多机 PodGroup；不满足 `minAvailable` 保持不可调度 | Volcano Gang、SP-08；SR-06-02 |
+| 成员准入/Dispatcher 对账 | Pod requests/PodGroup UID、Profile/grant 版本 | 检验实际规格与预留一致，报告 `ResourceMismatch`/实际资源占用 | 成员准入需有可信匹配字段和拒绝机制 | 仅告警不等于完成准入；不能自行复制 GitHub Job | PL-D07；SR-06-03 |
+| kubelet 与 NPU Device Plugin | Kubernetes Device Plugin API | 对已绑定 Node 上的 Pod 调用 Allocate，暴露健康设备 | 设备插件发布真实资源，名称与 Profile/Pod 一致 | 设备不足不降级 CPU 或合并跨成员设备 | K8S-3、SP-08 |
 
-**开发交付边界**：本节仅定义架构接口；NPU 扩展资源名、workflow/Runner Pod 模板、hooks 同节点条件、成员 Scheduler 类型及设备拓扑为 P 类输入，待后续设计确认，不宣称目标方案已部署。
+**架构接口边界**：Profile 的存储与版本传递、成员 admission 控制器的具体扩展点、Volcano/Gang 对特定 NPU 拓扑的约束能力需锁定版本后细化；F-06 仅定义所需的输入、输出、约束和异常结果。
 
 ### 5.6.9 DFX分析
 
-**性能与可靠性**：分开观测 Dispatcher 等待、Runner 供给/注册、实际 NPU Pod 从创建到 PodScheduled 的等待，以及设备准备。保护队首的节点预留只影响成员可用容量与调度约束，**不等于 Node Bind**。
+**主要不变量**：Profile 与实际工作负载版本关联；单 Pod 完整单节点可行、多 Pod 整组同成员可行；未落地授予不当作 NPU 实际占用；Dispatcher 不绑 Node，Volcano 不选成员；运行中 GitHub Job 不因集成层容量错误而额外重派。
 
 **可靠性故障分析（FMEA）**
 
 | 编号 | 失效原因 | 业务或系统影响 | 检测方法 | 处理与恢复要求 | 负责方 |
 |---|---|---|---|---|---|
-| F06-01 | 实际 NPU Pod 的资源名称或单位与 Device Plugin 不一致。 | NPU Pod 无法调度。 | 比对 workflow/Runner Pod requests 与 Node allocatable。 | 修正实际 NPU Pod 模板；不改动资源请求以绕过失败。 | 设备与服务维护者 |
-| F06-02 | hooks 强制 workflow 与 Runner 同节点，所选 Runner Node 没有 NPU。 | workflow Pod 长期 Pending 或放置失败。 | 检查 `nodeName`、required NodeAffinity、hooks 版本及 Pod 事件。 | 明确解除节点耦合或采取受约束放置路径；不把普通成员放置判断当 Node 保证。 | Hooks 与调度维护者 |
-| F06-03 | Dispatcher 估计可行，成员实际资源发生竞争或设备变为不可用。 | 已放行 Runner 但 NPU Pod Pending，Job 等待增加。 | 比较 Binding/容量账本、成员 FailedScheduling、Node 设备状态。 | 成员继续原生调度，Dispatcher 更新容量与后续放行；不额外重派 Job。 | Dispatcher 与成员调度维护者 |
+| F06-01 | 实际 NPU Pod 资源名与 Device Plugin 发布名称不同 | NPU Pod 无法调度 | Profile/Pod requests/Node allocatable 差异 | 修正可信 Profile 或实际 Pod 模板，不删除设备请求 | 资源池/设备维护者 |
+| F06-02 | hooks 将 workflow 强制固定到 CPU Runner Node | 有容量但不能使用正确 NPU Node | 检查 `nodeName`/required NodeAffinity、成员 Pod 事件 | 解除不必要的同节点耦合或改为有约束的成员放置 | Hooks/成员调度维护者 |
+| F06-03 | 联邦估计与真实资源竞争不一致 | 已放行 Runner 但 NPU Pod Pending | Binding grant、Node/Pod、FailedScheduling | 更新账本及后续放行，保留原 Job/Runner 身份 | Dispatcher/成员调度维护者 |
+| F06-04 | Runner Service 对应多个资源需求但 Profile 不唯一 | 错误预准入、NPU 长等待或超售 | ProfileVersion、实际 Pod 数量/requests、服务关联 | 缺少可信放行前资源声明时停止肯定准入，不把 CPU Runner 当 NPU 请求 | 服务目录/Dispatcher 维护者 |
+| F06-05 | 36 卡多 Pod 工作负载只按聚合卡数筛选成员 | 集群有空闲但 PodGroup 不满足拓扑/最小启动数，部分占用或死锁 | PodGroup Unschedulable、逐 Pod requests、节点拓扑 | 以完整 PodGroup 的同成员可行性准入，成员 Volcano Gang 负责节点级协同调度 | Dispatcher/Volcano 维护者 |
+| F06-06 | 实际 NPU Pod/PodGroup 与已授予 Profile 不一致 | 资源账本失真、越界占用或长时间 Pending | 对比 PodGroup UID、Pod requests、profileVersion、grant | 成员准入拒绝/等待不匹配请求，保持对账和错误证据，不仅告警 | 成员工作负载准入/Dispatcher 维护者 |
 
 **风险—措施—验证追踪**
 
 | FMEA | 失效模式 | 影响 | 风险 | 设计措施及对应约束 | 设计验证准则 | 剩余风险 |
 |---|---|---|---|---|---|---|
-| F06-01 | NPU resources 不一致 | Pending / FailedScheduling | 高 | SP-08 绑定真正 NPU Pod 的资源声明与设备插件名称 | 请求与 Node allocatable 的资源单位一致；失败不得降级 | 设备型号配置漂移 |
-| F06-02 | Runner/workflow 强制同节点 | 消除成员 NPU 可放置性 | 高 | PL-D02：按 hooks 版本确定耦合分支 | 有/无同节点约束时分别能指出成员内 Node 选择路径 | 当前 hooks 部署模式待确认 |
-| F06-03 | 容量快照与成员实时状态不同步 | NPU 任务等待 | 高 | PL-D02 容量账本/预留与成员调度事实对账 | 不把预留 Node 当已绑定；Pod Pending 有独立诊断 | 资源竞争、成员状态延迟 |
+| F06-01 | Profile/Pod/Device Plugin 名称不一致 | NPU Pod Pending | 高 | SP-08 校验资源名、设备单位及 Pod 请求 | 真实 Pod requests 与 Node 资源族兼容 | 设备型号和插件版本漂移 |
+| F06-02 | Runner/workflow 强制同节点 | NPU 执行无法获得可行节点 | 高 | PL-D02/D07 明确同节点约束或解耦路径 | 不把 CPU Runner 的 Node 当作 NPU workflow 必然可行的 Node | hooks 版本能力待确认 |
+| F06-03 | 资源快照与真实成员竞争 | Job 已放行却等 NPU | 高 | PL-D02/D07 按成员事实对账授予与实际占用 | Pod Pending 单独诊断；未落地授予不当作完成 | 异步资源竞争无法完全消除 |
+| F06-04 | Profile 不唯一或过期 | 不足预留/过量预留 | 高 | SR-06-01、PL-D07：版本化可信 Profile/服务身份 | 同一服务需求不确定时不能假称放行前已知卡数 | 部分 Job 只能后置排队 |
+| F06-05 | 多 Pod/Gang 只看 NPU 总量 | PodGroup 不能同时调度、资源占用低效 | 高 | SR-06-02、PL-D07：成员内整组 Pod/拓扑和 minAvailable | 36 卡多 Pod 请求按完整成员 Group 校验，不跨成员凑卡 | 设备拓扑兼容和成员实况需进一步确认 |
+| F06-06 | 实际 NPU 请求与授予不匹配 | 设备资源约束被突破或不能执行 | 严重 | SR-06-03：成员真实准入保护 + Profile/grant 对账 | 未配置真实准入拒绝路径不得声称 ResourceMismatch 能阻止不合规调度 | 需确认成员准入扩展点及 Hook 行为 |
 
-**运行诊断**：必须区分 CPU Runner Pod 与真正申请 NPU 的 workflow Pod（或直接 NPU Runner Pod），记录 NPU Pod UID、节点资源申请、PodScheduled、Device Plugin 事件及关联 Runner/Binding。不得把 CPU Runner 已就绪当作 NPU 容量已分配。
+**运行诊断**：关联 Runner Service、ProfileVersion、Binding/grant、成员 PodGroup/Pod、真实 Node、NPU requests、PodScheduled、Device Plugin 状态及 GitHub Job 结果。区分 Dispatcher Hold、PodGroup Gang 等待、设备准备和真实执行；CPU Runner Ready 不等于已获得 NPU。
 
 ## 5.7 跨功能时序与接口契约
 
-本节统一明确 F-01～F-06 的**输入、输出、前置条件、异常与幂等边界**。本节是现有功能设计的补充约束，不新增控制器、REST API 或 Swagger Endpoint。上游 ARC/Karmada/Kubernetes 的 API 定义优先于设计示意图。既有 US-01～US-08 的箭头表示业务协作关系；涉及实际对象创建顺序时，以目标版本控制器实现为准，不能把“ARC 创建 Pod/Secret”理解为 Listener 直接调用 Pod API。
+F-01～F-06 的接口条件、调用主体和异常处理汇总如下。ARC、Karmada 与 Kubernetes 的实际操作遵循目标版本 API；时序图中表达业务依赖的箭头不等同直接 API 调用。
 
 | 功能 / 场景 | 前置条件与输入 | 实现机制与输出 | 异常、并发与幂等边界 |
 |---|---|---|---|
@@ -1837,7 +2100,7 @@ sequenceDiagram
 | F-03 联邦放置及依赖；UC-05/06/10 | Runner Pod 匹配 PropagationPolicy、成员授权明确；Dispatcher 获得任务 NPU 规格与容量证据 | Dispatcher 决定 Cluster、持有或放行 Runner Binding；Karmada Work 分发 Runner 及 JIT；成员调度器为实际 NPU Pod 选择 Node | 无容量时 hold；不得扩张授权成员、复制 Runner 或重派 GitHub Job；成员失败由成员调度事实诊断 |
 | F-04 Listener 跨控制面认证；UC-08/11 | CA/SAN、有效 Token、受限 RBAC、正确 Karmada API endpoint | Listener 通过认证和授权后对目标 ERS/ER 执行所需 API 操作；输出 API 返回值与非敏感审计记录 | DNS/TCP、TLS、401、403、资源版本冲突分别处理；仅对授权资源重新读取并重试；轮换必须核实新凭证加载与旧身份失效 |
 | F-05 状态反馈；UC-09/12 | 控制面 Pod 与当前 Binding/Work 可关联；成员 Pod 身份及状态可信 | Karmada 汇总成员 `Pod.status`；ARC 读取必要 `conditions`、`containerStatuses`；输出控制面可见状态 | 当前 Lua 只支持唯一可信状态来源；多来源/过期状态不能取首个非空；重复和乱序事件按 UID/目标 Cluster 核对，不伪造 Ready |
-| F-06 NPU 扩展；UC-07/13 | **非本期正式 SR**；确认实际申请 NPU 的 Pod（workflow 或 Runner）、扩展资源名和成员/节点约束 | Karmada + Dispatcher 选择成员；成员 kube-scheduler/Volcano 选择 Node；kubelet/Device Plugin 实际分配设备 | NPU Pod 资源不足则 Pending；不得跨成员拼接、移除资源请求或自动降级 CPU |
+| F-06 NPU 核心能力；UC-07/13/14 | SR-06-01～03；Runner Service 已提供可信 Profile，区分单 Pod 与多 Pod/Gang，声明资源名、各 Pod 请求、版本和拓扑 | Dispatcher 选成员、Hold/Release Binding；Karmada 分发；成员 Volcano 选择 Node/PodGroup Gang；kubelet/Device Plugin 分配设备 | ProfileUnknown/NoFeasibleCluster 时保留等待；真实 Pod 请求不符时须成员准入拒绝或等待，不能只告警；不得跨成员拼接或重派 GitHub Job |
 
 **接口调用语义与真实上游分工**：
 
@@ -1848,7 +2111,7 @@ sequenceDiagram
 5. `Runner/Job → GitHub` 的执行状态/结果与 `Pod.status → Karmada → ARC` 的生命周期状态是两条独立链路。Secret 挂载成功、Pod Ready 或 Work 分发完成都不能替代 GitHub 的 Job 结果。
 6. `ResourceVersion` 冲突只在同一 Kubernetes API 对象上下文中按读后重试处理；不能以跨集群 resourceVersion、同名 Pod 或观察时间判定全局唯一执行。不存在跨 GitHub、ARC、Karmada 的原子提交或 exactly-once Job 保证。
 
-**接口设计出口**：现有 5.1.6～5.6.6 的原生 API/资源表分别承载各功能契约；第 4 章 SP-01～SP-09 规定跨功能约束；T2 的身份关联与 T3 状态机规定跨域前后条件。对尚未锁定的上游版本字段（尤其状态解释器多来源字段和 NPU 插件兼容性）保留显式待核对项，不编造 Swagger 字段、响应码或自动恢复行为。
+**接口关系：** 各功能接口见 5.1.6～5.6.6；跨功能规格见第 4 章，身份映射见 3.5，状态转换见 4.5。状态解释器字段及设备插件兼容性以目标版本为准。
 
 **依据**：[GitHub ARC 官方工作原理](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller)、[Karmada 依赖传播](https://karmada.io/docs/userguide/scheduling/propagate-dependencies/)、[Kubernetes Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)。
 
@@ -1858,14 +2121,14 @@ sequenceDiagram
 |---|---|---|---|---|
 | FT-01：SR-01-01 | F-01 | SP-01 | 5.1.4.1（UC-02 为异常场景） | `04-autoscalingrunnerset.yaml`、GitHub Workflow |
 | FT-01/FT-04：SR-02-01、SR-02-02 | F-02 | SP-01、SP-07 | 5.2.4.1 / 5.2.4.2 | 官方 ARC、RunnerSet、对象生命周期契约 |
-| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、Dispatcher Binding Hold/Release 与队列/预留接口（PL-D02/D03）、成员 NPU Pod 调度 |
+| FT-02/FT-03：SR-03-01、SR-03-02 | F-03 | SP-02、SP-03、SP-04 | 5.3.4.1 / 5.3.4.2 / 5.3.4.3 | `02-propagation-policies.yaml`、Dispatcher Binding Hold/Release（PL-D02/D03）、NPU Profile 与成员 Gang 资源准入（PL-D07） |
 | FT-03：SR-04-01 | F-04 | SP-04、SP-05 | 5.4.4.1 | `03-rbac.yaml`、`04-autoscalingrunnerset.yaml` Listener Template |
 | FT-03：SR-05-01 | F-05 | SP-06 | 5.5.4.1 | `01-karmada-interpreter.yaml` |
-| **扩展候选：原 SR-06-01，当前非正式 SR** | F-06 | SP-02、SP-08 | 5.6.4.1 / 5.6.4.2 | 尚需设备选型；仓库未配置 NPU 扩展资源 |
+| FT-05：SR-06-01～03 | F-06 | SP-02、SP-08、PL-D07 | 5.6.4.1 / 5.6.4.2 / 5.6.4.3 | Runner Service Profile、Dispatcher 成员容量准入、成员 Volcano Gang/PodGroup、实际 NPU Pod 对账 |
 
 ### 5.8.1 需求—用例—规格—接口—DFX 完整追踪
 
-**追踪口径**：IR 是功能能力要求，SR 为场景需求，UC 为用例，F 为实现设计单元，SP 为跨功能规格。FMEA 的编号 `F01-01` 等为失效模式，不是 F 功能编号；US 为时序图编号，不是系统需求。AR 尚未进入迭代分解，不得虚构。下表明确**正式需求**与**扩展候选**的差异。
+**追踪口径**：IR 是功能能力要求，SR 为场景需求，UC 为用例，F 为实现设计单元，SP 为跨功能规格。FMEA 编号（如 `F06-01`）是失效模式而非功能编号；US 是时序图编号。NPU 资源准入属于 IR-05/FT-05 正式设计范围，但不代表已获得正式业务指标或完成部署。
 
 | IR / 特性 | 正式 SR | 对应用例（含异常） | F 与接口 | 跨功能规格/约束 | DFX 与故障追踪 |
 |---|---|---|---|---|---|
@@ -1876,13 +2139,13 @@ sequenceDiagram
 | IR-03 / FT-03 | SR-03-02 | UC-06 | F-03；5.3.6 | SP-03、SP-04；LC-04 | 5.3.9：F03-02 |
 | IR-03 / FT-03 | SR-04-01 | UC-08、UC-11 | F-04；5.4.6 | SP-04、SP-05；SEC-01～06 | 5.4.9：F04-01～04 |
 | IR-03 / FT-03 | SR-05-01 | UC-09、UC-12（状态异常） | F-05；5.5.6 | SP-06、SP-07；LC-01/02/06 | 5.5.9：F05-01～03 |
-| 扩展候选（不属于正式 IR/FT） | 原 SR-06-01（未纳入） | UC-07、UC-13 | F-06；5.6.6 | SP-02、SP-08；PL-04/05 | 5.6.9：F06-01～03 |
+| IR-05 / FT-05 | SR-06-01～03 | UC-07、UC-13、UC-14 | F-03/F-06；5.3.6、5.6.6 | SP-02、SP-08；PL-D02/D03/D07 | 5.6.9：F06-01～06；QA-13/14 |
 
 **非功能要求的横向追踪**：SR-NF-01/02 对应第 4.4、5.4 及 F03-01/F04-03/F04-04；SR-NF-03 对应 4.5、4.7.2、F02-03/F03-03/F05-02/F03-07/09；SR-NF-04 对应 3.5.1、4.7.3、QA-04/08 及各功能诊断；SR-NF-05/06 对应 4.3.6、4.7.1/4.7.4、F02-01/F03-03/06/08、QA-07～09；SR-NF-08 对应 4.3、5.3、PL-01/02/09。完整的非功能条目见 5.8.2。
 
-**UC/US 对应关系**：UC-01→US-01；UC-03→US-02；UC-05→US-03；UC-06→US-04；UC-08→US-05；UC-09→US-06；UC-04→US-07；UC-07→US-08。UC-02、UC-10、UC-11、UC-12、UC-13 为异常分支，其中 UC-10/11/13 已给出异常时序，UC-02/12 由异常契约及状态规则覆盖；**没有对应独立 US 编号不表示该 UC 已被实现**。
+**UC/US 对应关系**：UC-01→US-01；UC-03→US-02；UC-05→US-03；UC-06→US-04；UC-08→US-05；UC-09→US-06；UC-04→US-07；UC-07→US-08；UC-14→US-09。UC-02、UC-10、UC-11、UC-12、UC-13 为异常分支，其中 UC-10/11/13 已给出异常时序，UC-02/12 由异常契约及状态规则覆盖；**没有对应独立 US 编号不表示该 UC 已被实现**。
 
-**现状与目标**：SP-02（当前无 Dispatcher Hold/Reserve/Backfill）、SP-03（Pod 选择器过宽）、SP-04（长期 GitHub 主凭证传播）、SP-05（Controller 高权限与 Token 轮换）、SP-06（状态解释器首个非空）均是目标设计与当前配置差异。PL-D03 规定公平与队首保护的设计条件，但并不代表这些机制已在本仓库部署，也不代表多来源状态一致性已经实现。
+**现状与目标**：SP-02（当前无 Dispatcher Hold/Reserve/Backfill）、SP-03（Pod 选择器过宽）、SP-04（长期 GitHub 主凭证传播）、SP-05（Controller 高权限与 Token 轮换）、SP-06（状态解释器首个非空）、SP-08（当前无 NPU Profile/Gang）均是目标设计与当前配置差异。PL-D03 规定公平与队首保护的设计条件，但并不代表这些机制已在本仓库部署，也不代表多来源状态一致性已经实现。
 
 ### 5.8.2 非功能需求与详细设计追踪
 
@@ -1892,32 +2155,25 @@ sequenceDiagram
 | SR-NF-02 凭证保护 | SP-04、SP-09 | 5.2.9、5.3.9、5.4.9 |
 | SR-NF-03 成员故障隔离 | SP-02、SP-07 | 5.2.9、5.3.4.3、5.3.9 |
 | SR-NF-04 可服务性 | SP-09 | 5.1～5.6 各功能的 DFX |
-| SR-NF-05 性能与容量 | SP-01/02、SP-09、PL-D03～D06 | 4.3.6～4.3.9、4.7.1/4.7.4、5.3.4/5.3.9；量化参数 P-SR-01、P-SR-02 |
+| SR-NF-05 性能与容量 | SP-01/02/08/09、PL-D03～D07 | 4.3.6～4.3.9、4.6.3、4.7.1/4.7.4、5.3.4/5.3.9、5.6.9；量化参数 P-SR-01、P-SR-02 |
 | SR-NF-06 成本与资源利用 | SP-01、SP-07 | 5.2.3、5.2.9；量化参数 P-SR-04 |
 | SR-NF-08 策略可维护性 | SP-01、SP-02 | 4.2、4.3、5.3.6 |
 
-本表只将与 FT-01～FT-04 相关的正式 SR 关联至详细设计。第 4、5 章仍可保存 ARC/Karmada 的必要技术契约和 NPU 扩展参考，但不把所有实现机制或通用 DFX 项目升级为正式系统需求。量化参数未获得业务批准时，对应指标保持待定。
+本表将 FT-01～FT-05 相关的正式功能与非功能需求关联至详细设计。第 4、5 章继续保留 ARC/Karmada/Volcano 的必要技术契约和 NPU 资源准入设计，但不把所有实现机制或通用 DFX 项目升级为正式系统需求。量化参数未获得业务批准时，对应指标保持待定。
 
-### 5.8.3 最终设计评审的判定边界
+### 5.8.3 待确认的能力与配置
 
-本设计的“完成”是指功能与质量属性的**设计契约可审查**，而不是跨组件组合已经经过验证。尤其需要区分：（1）现有 Manifest 已体现的配置；（2）官方版本直接支持的 API 和机制；（3）本项目要求但尚未实现或尚未证明可由现有扩展点实现的集成行为。
-
-| 待确认项 | 文档已有的设计结论 | 验收限制 |
+| 能力 | 现有配置或目标机制 | 待确认事项 |
 |---|---|---|
-| Karmada `ResourceInterpreterCustomization` 多来源识别 | 必须根据当前目标成员/对象身份过滤状态，冲突时不得宣称 Ready | 未确认目标版本的 `statusItems` 可见字段与筛选扩展点，不得标记“可直接由当前 Lua 实现” |
-| ARC Controller/Listener RBAC 最小化 | 必须根据目标版本的真实 API verbs/resources 收敛 | 当前 Controller admin kubeconfig 不符合生产目标；文档不能替代权限实施 |
-| JIT Secret 异步传播与删除 | 依赖 Pod 引用及 Karmada `propagateDeps`，清理需确认成员副本 | 不能推断所有引用形态均自动识别，或跨成员销毁是原子事务 |
-| NPU 资源容量与节点可放置性 | PL-D02：Dispatcher 选择成员并协调容量预留，成员 kube-scheduler/Volcano 选择 NPU Node，kubelet/Device Plugin 分配设备 | Dispatcher Binding 独占权、hooks 同节点行为、成员容量估计及预留恢复需版本级确认；当前 Manifest 未实现 |
-| FIFO/Reserve Node/Backfill | PL-D03：Dispatcher Hold/Release、节点容量保护、独立容量 Backfill | 成员 Toleration/同组 Hold 及租约清理尚需版本接口确认 |
-| 跨租户公平 | PL-D04：以同 NPU 资源族实际分配卡时/批准权重作为仲裁依据 | 租户身份、权重、计量窗口、老化规则未批准；不得跨异构卡数直接加总 |
-| PR/nightly 成员优先级 | PL-D05：为实际 nightly NPU Pod 配置较低的 Kubernetes PriorityClass，成员 Volcano 启用 Priority Plugin 决定节点调度顺序 | 必须确认 workflow/Runner Pod 模板、schedulerName、PriorityClass 引用及 Volcano 抢占动作；此配置不作用于 Dispatcher Hold 队列，也不自动昼夜反转 |
-| Dispatcher 故障降级 | PL-D06：ACTIVE/RECOVERING/DEGRADED/FAIL_CLOSED/RESTORING 及单 Writer 互斥 | 进度健康、旧 Writer 失效证明、Karmada 应急调度和容量预留兼容需锁定版本；失败则停止新增放行 |
-| 关键路径与可用性目标 | 已定义阶段、来源、故障域和诊断契约 | 没有业务批准的时延/恢复阈值，不构成量化性能与可用性验收 |
+| 多来源状态聚合 | 当前 Lua 选择首个非空状态 | Karmada 目标版本能否提供目标成员/Pod 身份及冲突筛选接口 |
+| Controller/Listener 权限 | Controller 仍使用高权限 kubeconfig | ARC 目标版本所需最小 Kubernetes API 权限、Token 更新行为 |
+| JIT Secret 传播与回收 | Karmada `propagateDeps` | 引用识别范围、成员副本删除确认 |
+| NPU 成员准入 | Dispatcher 基于 Runner Service Profile（PL-D07）做完整工作负载成员容量判断，成员 Volcano 调度真实 Pod/PodGroup | Profile 发布、可信服务身份、设备拓扑与成员 Node/Gang 可行性及容量估计仍需接口确认 |
+| FIFO/Reserve Node/Backfill | Dispatcher Binding Hold/Release + 全 Node 保护；多 Pod/Gang 以同成员 Node 组授权租约，部分失败安全回滚 | 成员准入精确 Toleration、Node taint 绕过防护、完整 Group 预留回滚和保护开销计量需锁定接口；不能宣称卡级保护 |
+| 跨租户公平 | 按同资源族的卡时、权重仲裁 | 租户身份、权重、计量窗口和老化规则 |
+| PR/nightly 优先级 | nightly 实际 Pod/VolcanoJob 由工作流模板声明低优先级；hooks 自动创建 Pod 时由可信成员模板控制；成员 Volcano 排序 | 共享 Runner 静态模板不能自然区分任务类别；需核对 Pod/PodGroup 优先级、保留类使用权限及 Volcano Action 不抢占约束 |
+| Dispatcher 故障恢复 | 单 Writer、状态恢复及安全停止放行 | 互斥与旧 Writer 失效证明、恢复顺序及兼容机制 |
+| Profile 与实际工作负载一致性 | Dispatcher grant 持有 ProfileVersion，成员准入与真实 Pod/PodGroup 对账 | 服务内多种规格的可信需求来源、成员准入拒绝路径、PodGroup/Runner 关联协议 |
+| 性能和可用性 | 已区分 GitHub 排队、联邦等待、Gang 待调度和实际 NPU Pod 执行 | 业务认可的分位数、恢复时间、采样与统计窗口 |
 
-**DFX 设计决策追踪**：PL-D01 → F-03/QA-01～02；PL-D02 → F-03/QA-01/04、PL-07/08、F03-03～05；PL-D03 → F-03/QA-07～09、PL-09～13、F03-06～09；PL-D04 → PL-14、QA-10、F03-10；PL-D05 → PL-15、QA-11、F03-11；PL-D06 → PL-16/17、QA-12、F03-12/13；ST-D01 → F-05/QA-03；QA-05/06 → SP-07/09。剩余风险见 4.7.4。
-
-**最终评审口径**：第 2～5 章设计结构、要求追踪、异常处理与 FMEA 可以通过静态设计检查；涉及上表未确定的技术可实现性、正式指标或实际运行效果，只能标为**待专项选型/接口确认**。不要求开展 PoC，也不以抽象时序图替代上游 API 证据。
-
-**统一资料来源及版本边界**：本文件 3.7 给出 ARC/GitHub Actions、Karmada、Kubernetes 官方文档索引；本仓库现有 Manifest 用于定位配置差异；任何仅有内部运行记录支持、而无上游接口规范支持的声明都应标明为集成设计假设。缺少 PoC 不构成功能设计缺口，但 **SR/接口/异常/DFX 未定义**属于设计缺口。
-
-**实施前需选择的参数（P）**：GitHub 组织/仓库与权限、目标版本和镜像 digest、联邦控制面 API/DNS/CA、凭证发行及轮换、成员与资源标签、NPU 资源族与扩展资源名、公平窗口/租户权重与配额、nightly/PR Pod PriorityClass 相对取值及 Volcano Scheduler 动作、Reserve/Backfill 租约预算、故障恢复进度阈值/排他机制、性能/可用性 SLO。若有正式输入来源，则填写批准值；如果尚无，不得硬编码临时 Kind IP 或杜撰业务 SLA。
+**关联规范：** ARC/GitHub Actions、Karmada 和 Kubernetes 官方依据见 3.7；Volcano Gang/PodGroup 依据见 4.6.3 与 5.6。具体配置需确定组件版本、API 地址与 CA、凭证轮换、成员授权、NPU 设备类型、容量和公平参数、Volcano 优先级以及故障恢复阈值。
