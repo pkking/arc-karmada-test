@@ -34,6 +34,10 @@
 
 ![资源无法互用、资源利用不均衡与任务排队过长：联邦执行前后对比](images/federation-subsystem-goal-before-after.svg)
 
+<p align="center">图 1-1 集群隔离与联邦资源共享的业务对比</p>
+
+说明：目标利用授权成员的合格 NPU 空闲资源减少不必要的任务等待。
+
 **现状：** 集群按项目独占，空闲容量无法共享，任务排队。
 
 **目标：** ARC 统一供给 Runner，Dispatcher 在 Karmada 控制面按授权、容量及 FIFO/Reserve Node/Backfill 决定何时放行并选择成员，成员 Kubernetes 完成 NPU 节点调度。资源共享减少因集群割裂造成的等待；租户公平权重与等待目标仍需批准；PR/nightly 的成员调度顺序见 PL-D05。
@@ -43,6 +47,10 @@
 ## 1.4 整体架构
 
 ![ARC + Karmada 联邦调度执行子系统整体架构](images/overall-subsystem-architecture.svg)
+
+<p align="center">图 1-2 联邦 Runner 执行子系统整体架构</p>
+
+说明：Dispatcher 选择成员、Karmada 分发、成员 Volcano 为实际 NPU Pod 选择节点。
 
 目标系统包含 ARC、Dispatcher、Karmada、成员 Volcano/kube-scheduler 与实际 NPU Pod/PodGroup；外部接口如下。**Dispatcher 选成员，Karmada 分发，成员选择 NPU Node**。
 
@@ -118,6 +126,10 @@
 **用例概览：**
 
 ![昇腾CI 联邦集群功能域概要用例视图——业务角色与主要用例关系](images/federated-cluster-use-case-overview.svg)
+
+<p align="center">图 2-1 联邦 Runner 执行功能域主要用例</p>
+
+说明：用例涵盖统一入口、跨成员执行与回收；NPU 资源准入和 Gang 由 UC-07/13/14 细化。
 
 > 图示为既有用例概要，NPU 资源准入与多节点协同任务已纳入 FT-05，分别由 UC-07/13/14 细化；Pod、Secret 与状态处理见第 5 章。
 
@@ -267,6 +279,10 @@ flowchart LR
 
 ![联邦调度执行系统逻辑架构](images/federation-layered-architecture.svg)
 
+<p align="center">图 3-4 联邦调度执行子系统的目标分层架构</p>
+
+说明：跨成员资源控制与成员 Node/Gang 调度分别由 Dispatcher 和 Volcano 负责。
+
 **问题：** 项目与集群绑定，空闲容量难共享、任务排队。**方案：** ARC 统一供给，Karmada 分发，成员 Kubernetes 执行。
 
 | 架构构件 | 主要解决的问题 / 架构职责 | 与其他构件的协作关系 |
@@ -309,6 +325,10 @@ erDiagram
   RESOURCE_BINDING ||--o{ WORK : "分发至成员"
   WORK }o--|| MEMBER_CLUSTER : "定向交付"
 ```
+
+<p align="center">图 3-2 领域对象与联邦身份关系</p>
+
+说明：业务身份关联不等于 Kubernetes OwnerReference，实际所有权以目标版本 API 为准。
 
 图为**领域概念关系**，不等于原生 Kubernetes OwnerReference；动态资源真实归属由所选 ARC/Karmada 版本定义。以下表格是实现和销毁规格：
 
@@ -372,6 +392,10 @@ erDiagram
 ## 3.6 部署拓扑与周边服务
 
 ![ARC 与 Karmada 联邦调度执行系统部署架构](images/arc-karmada-deployment-architecture.svg)
+
+<p align="center">图 3-5 ARC、Karmada 与成员 NPU 调度的目标部署拓扑</p>
+
+说明：管理面和执行面可按多地域部署；本图不依赖 Kind 等 PoC 配置。
 
 | 部署域 | 构件 | 运行接口 | 设计约束 |
 |---|---|---|---|
@@ -571,6 +595,10 @@ sequenceDiagram
     end
 ```
 
+<p align="center">图 4-1 Dispatcher 与成员调度器的两级放置路径</p>
+
+说明：Dispatcher 只选成员，实际 NPU Node 由成员 Volcano/kube-scheduler 决定。
+
 **静态反例与判据**：
 
 | 场景 | 联邦层决定 | 成员层决定 |
@@ -661,6 +689,10 @@ sequenceDiagram
     M-->>L: Pod 绑定与容量反馈
     L-->>D: 更新 grant、预留与队列快照
 ```
+
+<p align="center">图 4-2 FIFO、Reserve Node 与安全 Backfill</p>
+
+说明：节点保护与同组 Hold 控制容量，不等于 NPU 卡级原子预约。
 
 **故障域、恢复和退化契约**：
 
@@ -927,6 +959,10 @@ stateDiagram-v2
   CleanupUnknown --> Reclaimed: 恢复连接并核对
 ```
 
+<p align="center">图 4-3 跨域 Runner 状态与生命周期转换</p>
+
+说明：GitHub Job、ARC Runner 和 Kubernetes Pod 各自维护权威状态。
+
 | 约束 | 不变量与禁止行为 |
 |---|---|
 | LC-01 Job 权威性 | 只有 GitHub Job 事实能够确认执行结果；Pod Ready/Failed、Work 同步不能推导 Job 成败或触发自行重派 |
@@ -1192,6 +1228,10 @@ sequenceDiagram
     Note over GH,L: 此处代表一个 Scale Set 的 Listener 会话，不限制其他 Scale Set
 ```
 
+<p align="center">图 5-1-1 统一 Runner 服务提交主路径</p>
+
+说明：开发者继续使用统一 runs-on 标签，成员选择对工作流透明。
+
 
 
 ### 5.1.5 用户接口设计
@@ -1283,6 +1323,10 @@ sequenceDiagram
     Note over C,K: ARC 和 Karmada 异步回收按各自所有权处理，残留 Finalizer 需独立治理
 ```
 
+<p align="center">图 5-2-1 Runner 弹性创建主路径</p>
+
+说明：GitHub/ARC 负责 Runner 供给，Karmada 在目标成员传播 Runner 对象。
+
 
 
 #### 5.2.4.2 UC-04 Job 结束回收 Runner 与凭证——运行时序（US-07）
@@ -1319,6 +1363,10 @@ sequenceDiagram
     Note over ARC,Member: 删除按各控制器异步调谐完成，不代表所有历史对象零残留
 ```
 
+<p align="center">图 5-2-2 Runner 与临时依赖回收</p>
+
+说明：Job 结果、Pod 删除和凭证清理分别由相应权威组件确认。
+
 
 
 #### 5.2.4.3 生命周期回收契约和异常时序
@@ -1341,6 +1389,10 @@ sequenceDiagram
   end
   Note over G,M: 不以 Job 完成推断跨成员删除原子完成；不自行重新派发 Job
 ```
+
+<p align="center">图 5-2-3 Runner 生命周期异常恢复</p>
+
+说明：异常恢复不代表同一个 GitHub Job 可以安全重复执行。
 
 | 触发 | 应核对的事实 | 恢复责任 |
 |---|---|---|
@@ -1455,6 +1507,10 @@ sequenceDiagram
     Note over K,M: Dispatcher 选成员及放行，成员 Scheduler 选 NPU Node
 ```
 
+<p align="center">图 5-3-1 Dispatcher 选择成员并放行 Runner</p>
+
+说明：联邦容量判断发生在成员传播前，不替代 Node/Gang 调度。
+
 
 #### 5.3.4.2 UC-06 JIT Secret 晚到后的依赖恢复——运行时序（US-04）
 
@@ -1492,6 +1548,10 @@ sequenceDiagram
     Note over API,Pod: 凭证与 Pod 共置于选定成员，任务结束后的回收见 US-07
 ```
 
+<p align="center">图 5-3-2 JIT Secret 延迟传播与恢复</p>
+
+说明：JIT Secret 未到达时，不得判定 Runner 已具备执行条件。
+
 
 
 #### 5.3.4.3 UC-10 成员不可用——异常运行时序
@@ -1516,6 +1576,10 @@ sequenceDiagram
       Note over ARC,Ops: 故障恢复与 Job 重试分别由上游机制和业务幂等性约束
     end
 ```
+
+<p align="center">图 5-3-3 成员失联诊断路径</p>
+
+说明：成员失联不自动触发运行中 GitHub Job 的迁移或重复派发。
 
 **异常约束**：不得将成员失联等价于 GitHub Job 已失败或可安全重复执行；设计仅保证可诊断的异常状态和责任边界。
 
@@ -1665,6 +1729,10 @@ sequenceDiagram
     Note over L,ERS: 跨控制面身份及配置 Secret 更新语义须在集成设计中明确
 ```
 
+<p align="center">图 5-4-1 Listener 跨控制面访问</p>
+
+说明：TLS、认证、RBAC 权限各有明确控制面与错误归属。
+
 
 
 #### 5.4.4.2 UC-11 令牌轮换、权限拒绝和撤销——异常时序
@@ -1689,6 +1757,10 @@ sequenceDiagram
   end
   Note over I,A: Token/CA 的容器重新加载方式为实施时必须确认的契约，不能推定普通 Secret 自动续期
 ```
+
+<p align="center">图 5-4-2 控制面访问及凭证异常恢复</p>
+
+说明：区分网络、证书、认证、授权和凭证撤销。
 
 | 情况 | 错误归属 | 设计恢复动作 | 禁止行为 |
 |---|---|---|---|
@@ -1791,6 +1863,10 @@ sequenceDiagram
     ARC->>ARC: 正确识别就绪，避免缺字段导致超时误删
     Note over RI,ARC: 通过 ResourceInterpreterCustomization 声明 Lua 规则，无需修改 Karmada 源码
 ```
+
+<p align="center">图 5-5-1 成员 Pod 状态反馈到 ARC</p>
+
+说明：旧 Ready 不一定代表当前成员可执行，冲突要回到权威来源核对。
 
 
 
