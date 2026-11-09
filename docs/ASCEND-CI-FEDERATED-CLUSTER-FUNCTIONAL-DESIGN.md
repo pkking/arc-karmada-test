@@ -674,6 +674,43 @@ sequenceDiagram
 **参考方案：** 组织现有 [`arc-fedsched` 的 `DESIGN.md`](https://github.com/opensourceways/arc-fedsched/blob/main/docs/DESIGN.md) 已定义按 Binding Hold/Release、`fifo-reserve-node` 策略、Node 预留、同组 Hold、grant/ledger 和成员 janitor；其中的 Hold/Release、容量保护及 janitor 机制可作为接口参考；现有仓库尚未部署这些功能。Karmada API 及会更改 Binding 的其他控制器行为仍需针对目标版本核对：[Karmada Scheduler](https://karmada.io/docs/next/developers/customize-karmada-scheduler/)；[Kubernetes Scheduling](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)。
 
 
+
+#### 4.3.6.1 Reserve Node 的保护粒度及多节点协同约束
+
+**架构选择（D）**：当前目标使用 Kubernetes Node `NoSchedule` taint 配合短租约、精确 Toleration 和 Dispatcher 同组 Hold。**保护粒度是整个 Node 的新 Pod 调度入口，不是精确的 NPU 卡数。** 这是一种保守的容量保护机制：若在 8 卡 Node 上为一项 2 卡任务创建保护，默认阻止其他不具备该保护组 Toleration 的新 Pod 使用**整台 Node**，不能把剩余 6 卡记作可供任意租户安全回填。正在运行的 Pod 不会因为 `NoSchedule` 被驱逐。[Kubernetes Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)。
+
+**方案选择与兼容边界**：
+
+| 保护方式 | 资源粒度与结果 | 设计选择 |
+|---|---|---|
+| Node `NoSchedule` + 短租约 + Group Hold | 整 Node 限制后续不匹配 Pod；只靠 Taint **不保证**队首会选择该 Node | **默认保守保护**；与成员 Volcano Node 选择权兼容，但有空闲卡损失 |
+| 将 `NoSchedule` 视作“仅保护 2/8 张卡” | 不成立，Node Taint 不表达设备切片 | 禁止作为账本/Backfill 依据 |
+| Volcano 定制成员调度策略、可证明的资源级预留协议 | 可以作为未来精细化保护方案，但需证明在成员 Node/PodGroup 层的真实资源锁定、授权和释放语义 | 独立专项设计；本方案不凭 Volcano 默认 Plugin 宣称支持精确卡级预留 |
+| 仅设置 ResourceQuota/Namespace 配额 | 限制资源总量，不能保证具体 Node 上的可放置空间 | 不替代 Reserve Node |
+
+**单 Pod 与多 Pod 的预留对象**：
+
+1. 单 Pod 资源规格需要一台可满足完整请求的候选 Node；Node 的可保留容量按该 Node 实际受保护的剩余可调度资源计入预算，而非仅按 Pod 的 2/4 卡 requests 记为“占用 2/4 卡”后再向其他任务开放其余卡。
+2. 多 Pod/Gang 的 Profile（PL-D07）应以**同一成员的一组候选 Node**为保护对象，包含 `reservationGroupId`、所属 Binding UID、profileVersion、所需各 Pod 资源/拓扑约束、集合版本、租期。所有候选 Node 均达到预期保护状态前，不得宣称整个 Gang 的容量保护成功。**不是跨成员 Node 集合**。
+3. Node 保护的建立、刷新、失效按实际成员 API 的对象版本/身份逐 Node 处理，不能假设写入多个 Node Taint 是 Kubernetes 原子事务。部分 Node 失败时，记录 `ReservationPartial`，立即使队首保护降为未确认并**按归属回滚已成功的部分**，防止泄漏；旧租约的 Node 只能由匹配归属和版本的控制器清理。
+4. Node Taint 只影响后续调度，不能为已运行 Pod 腾出 NPU 卡，也无法保证 Gang 任务完成绑定。Dispatcher 对预留集合持续对账 Node 占用及 Volcano PodGroup/PodScheduled，容量变化时重算可行性；若真实绑定不使用某候选 Node，释放对应保护并修正占用账本。
+5. 保护组 Toleration 必须由受信任的成员工作负载模板/准入路径对**队首实际 NPU Pod/PodGroup**授权，必须精确匹配 `key/value/effect`；同组后继仍需 Dispatcher Hold。未经授权的工作负载不得持有宽泛 `operator: Exists` 或通过直接设置 `nodeName` 绕过成员调度保护。
+6. **安全 Backfill 边界**：有 Node 保护时，其他任务只使用**不被保护的 Node**，并按其完整 Pod 或 PodGroup 请求判定可调度。若希望使用受保护 Node 的其他 NPU 卡，先设计能精确分割卡级资源且不会延迟队首的成员 Scheduler 约束；否则宁可降低短期利用率，也不能把保护容量与可回填容量双重计入。
+
+**容量与 DFX 计量**：把 `requestedNpuCards`（队首 Profile 需求）、`protectedNodeAllocatable`（保护节点的完整可调度资源）、`protectedNpuCardSeconds`（保护开销）、`actualBoundNpuCards`（真实 Pod 已绑定设备请求）及 `reservationPartialCount` 分开统计。**保护造成的闲置是可观测开销**，不能记为 NPU 已运行利用率；队列吞吐不能通过虚报部分卡级 Backfill 美化。监控 Node 保护耗时、集合不完整、租约泄漏、违规 Toleration 和外部绕过调度的写入。
+
+**失效与恢复判据**：
+
+| 情况 | 必须采取的行为 | 禁止行为 |
+|---|---|---|
+| 一台 8 卡 Node 为队首 2 卡预留，仍有 6 卡未被请求 | 保守保护整 Node 的新 Pod 入口，并把可能损失的卡时计入保护开销 | 将 6 卡当作普通 Backfill 可用额度，默认为 Taint 能实现卡级隔离 |
+| 多 Node Gang 预留 3 台中有 1 台写入 Taint 失败 | 标记 ReservationPartial，全部保护状态未确认；回滚前两台的本组保护或等待安全重试 | 在不完整 Node 集合上宣布队首有完整资源 |
+| 旧 Dispatcher 故障，成员存在过期保留 Taint | 成员 Janitor 按匹配归属、版本、租约撤销；新 Leader 先账本对账 | 无条件清除其他调度器的 Node Taint 或保留永久阻塞 |
+| 队首 NPU Pod 未携带精确 Toleration | 诊断 `ReservationAccessMismatch`，不能把保护成功等同于任务可运行 | 让 Dispatcher 直接设置 NPU Pod `nodeName` 绕过成员 Volcano |
+| 未管理的 Pod 使用 `nodeName` 或宽泛 Toleration 绕过保护 | 检测违规并冻结有风险的保护/新放行，依成员准入权限处理 | 宣称仅凭 `NoSchedule` 绝对保证 NPU 排他 |
+
+**限制**：Kubernetes 对 Node `NoSchedule` 的行为是原生事实；整 Node 保护、同组 Hold、Gang 成组租约和成员准入联动是本项目的目标集成设计，**不是原生 Taint 自带的全局资源预约协议**。如果目标成员无法保证精准 Toleration 和非受控调度绕过的治理，禁止宣称 Reserve Node 安全有效，须保守退化为 FIFO/等待策略。依据：[Kubernetes Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)、[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)。
+
 ### 4.3.7 跨租户加权公平仲裁（PL-D04）
 
 **设计决策（D）**：Dispatcher 在 PL-D03 的**可互换 NPU 资源族/拓扑域**内做跨租户加权公平仲裁；各租户内部按 FIFO 取出候选，**不参与 PR/nightly Pod 优先级排序**。公平计量用**已分配 NPU 卡时**而非 AI Core 利用率或 GitHub Job 数量；成员容量、拓扑和授权是硬约束，公平排序不得越过硬性准入。该机制不改变 GitHub 队列，也不抢占已运行 Pod。
