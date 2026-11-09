@@ -721,6 +721,26 @@ sequenceDiagram
 
 **官方依据**：[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Actions：Allocate、Preempt 与 Reclaim](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass 与非抢占优先级](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。具体优先级数值、PriorityClass 名称、Volcano scheduler 配置及 Pod 模板来源是部署参数；**本设计不要求 Dispatcher 增加 Job 识别接口**。
 
+
+#### 4.3.8.1 PriorityClass 的设置入口与权限契约
+
+**选择的主路径（D）**：由 **nightly 工作流所创建的真实 NPU 负载**（Pod、VolcanoJob 的 Pod 模板或其 PodGroup）声明低优先级 `priorityClassName`，PR 工作负载保持正常优先级。两者仍可使用同一个 `runs-on` 和 ARC Runner 服务；Dispatcher 不需要认识 Job 的 PR/nightly 类别。优先级只在**成员 Volcano 已接收的工作负载**范围内生效，不取代联邦 FIFO/Reserve/Backfill。
+
+| 实际 NPU 工作负载入口 | 负责写入 `priorityClassName` 的主体 | 约束与结论 |
+|---|---|---|
+| nightly 在成员 API 中创建 Kubernetes Pod/Job 或 VolcanoJob | nightly 受控的 NPU 工作负载 Pod 模板；使用 VolcanoJob 时同步 Job/PodGroup 的优先级 | **推荐目标**：优先级与真实 NPU 工作负载绑定，保留同一 Runner `runs-on`；必须保证使用成员 Volcano 调度入口 |
+| ARC Kubernetes mode 的 runner-container-hooks 自动创建容器工作 Pod | 受控的 Hook PodSpec 模板或成员准入/模板组件 | 官方 Hook Extension 可修改 PodSpec；但**同一 Runner Service 上的一份静态模板不能天然区分 PR/nightly**。无可靠的成员侧区分依据时，不得声称可对两类自动应用不同优先级 |
+| Job 直接在 Runner Pod 内运行且该 Runner Pod 申请 NPU | 该 Runner Service 的 Runner Pod 模板 | 只有当该服务的负载类别一致时可静态设置；混用 PR/nightly 的 Runner Pod 不能凭相同模板区分 |
+| 未能证明 NPU Pod 模板中的优先级来源 | 无权威来源 | 采用默认成员调度优先级，记录 `PriorityUnspecified`，不把 Dispatcher 当作分类补丁 |
+
+**可信与公平边界**：PriorityClass 为成员集群级资源，名称和数值由平台配置保持一致；只有被授权的 nightly 模板/工作负载身份可以使用相应类别。用户提交的任意 Workflow、PR 标签或容器字段不得通过未受控的 PodSpec 注入升为平台保留的高优先级。具体通过命名空间/ServiceAccount 归属与 Kubernetes admission 规则约束。高优先级变更不允许覆盖设备申请、成员授权或 Dispatcher 的有效 Reserve Node taint。
+
+**无抢占约束**：正常模式只改变成员待调度 Pod/PodGroup 的排序；不得因 PR 到来驱逐已运行的 nightly。必须按目标 Volcano 版本确认 scheduler **actions** 中 `preempt`/`reclaim` 是否启用，并保证所需的 `allocate`/`enqueue`/`gang` 组合不会导致意外抢占。Kubernetes `PriorityClass.preemptionPolicy: Never` 只阻止该 Pod 主动抢占，不能阻止其他工作负载抢占它，**单靠该字段不满足全局不抢占目标**。
+
+**场景判据**：在同一成员内，PR 与低优先级 nightly 均已 Pending 且可行时，Volcano 的 Priority Plugin 应优先调度 PR；已有 nightly 运行时，PR 等待资源释放。若 nightly Pod 没有实际的低优先级类、PodGroup 与 Pod 优先级不一致，或未进入 Volcano 调度器，诊断应判为成员模板/调度配置问题，不归因于 Dispatcher。
+
+**上游依据**：[GitHub ARC Hook Extensions](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Volcano Priority Plugin](https://volcano.sh/docs/scheduler/plugins/priority/)、[Volcano Scheduler Actions](https://volcano.sh/docs/scheduler/actions/)、[Kubernetes PriorityClass](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。
+
 ### 4.3.9 Dispatcher 故障接管与安全降级（PL-D06）
 
 **设计决策（D）**：正常态由 Dispatcher 独占其 `schedulerName` 对应 Binding 的 Hold/Release/Cluster 选择。故障时先尝试**同等语义的另一 Dispatcher Leader 接管**；仅在新 Leader 不能恢复且由明确的健康判据触发时，才允许互斥的 break-glass 官方 Karmada Scheduler 用同一 `schedulerName` 恢复基本成员放置。**降级可损失 FIFO、跨租户公平、Reserve/Backfill，但不能丢失成员授权、NPU 请求与已绑定 Runner 的单目标/不重复执行约束。**
