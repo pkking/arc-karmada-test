@@ -939,6 +939,44 @@ Device Plugin 发布扩展资源（U）。按设备需求设置候选成员和 P
 
 设备不足时，Pod 保持不可调度并保留原因；插件未就绪时不得删掉 NPU 请求或降级至 CPU 节点。成员 Kubernetes、设备插件和运维人员分别排障；型号、资源名、性能指标为部署参数（P）。
 
+
+### 4.6.3 Runner Service Resource Profile 与准入契约（PL-D07）
+
+**设计决策（D）**：联邦容量准入以**平台可信的 Runner Service Resource Profile（以下简称 Profile）**为依据，不以 CPU Runner Pod 的 `resources.requests` 推算未来的 NPU 需求。Profile 是设计层的资源规格，不是 GitHub、ARC 或 Karmada 已存在的标准 CRD。平台通过服务目录将 Runner Service 标识映射到 Profile 及其版本，Dispatcher 在放行 Runner Binding **之前**获得此声明；成员真实 NPU Pod/PodGroup 的资源约束必须与之匹配。
+
+| 逻辑字段 | 来源与语义 | 设计约束 |
+|---|---|---|
+| `runnerServiceId`, `profileVersion` | 经授权的 Runner Service/Scale Set 配置和平台发布的不可变 Profile 版本 | `runs-on` 用来选择 Runner 服务，**不直接包含 NPU 需求数量**；不能仅信任 PR 可修改的标签 |
+| `deviceResourceName`, `deviceFamily` | 成员 Device Plugin 扩展资源名、受支持的设备型号与资源族 | Profile 必须与目标成员 Node `allocatable` 中的真实扩展资源匹配；不同设备型号不能无约束互换 |
+| `workloadShape` | `single-pod` 或 `multi-pod-group` | 单 Pod 应在成员单个 Node 上完整放置；多 Pod 以同成员的整组请求及 gang 最小同时运行要求做容量判断 |
+| `podRequests[]`, `minAvailable` | 各 Pod 的 NPU/CPU/内存请求、Pod 数量及多 Pod 同时就绪下限 | 对多 Pod 不能只声明聚合卡数；`minAvailable` 只能表达经过批准的最小可运行组，不能把需要全组启动的任务降为部分启动 |
+| `placementConstraints` | 成员授权、节点架构/亲和性、节点间拓扑与网络约束、软件环境 | 将成员资格、设备资源与拓扑能力区分；容量通过但拓扑不满足仍不可放行 |
+| `schedulerPolicy` | 目标成员调度器、PodGroup/Gang 需求及 Volcano 队列策略 | Dispatcher 不决定具体 Node；由成员 Volcano 对真实 Pod 完成准入与绑定 |
+| `owner`、生效范围 | 服务维护者及平台资源治理配置 | 配置变更产生新版本，已放行的 grant 保留原版本用于对账，禁止无记录地重新解释历史资源请求 |
+
+**取得 NPU 需求的时间与可行模式**：
+
+| 任务形态 | 放行前可见的输入 | 允许的架构行为 |
+|---|---|---|
+| 一个 Runner Service 只对应一种稳定资源规格 | 平台维护的可信 `runnerServiceId → profileVersion` | **目标主路径**：Dispatcher 以 Profile 对目标成员做容量准入，成员执行 Pod 按同规格申请资源 |
+| 多个 Job 共用相同 `runs-on`，但 NPU 数量或多机拓扑不同 | ARC 默认 Runner 扩容/Pod 创建不必携带具体尚未分配的 Job 资源需求 | 只有额外的**可信、放行前可关联的资源需求契约**才能精确预准入；否则不能假装 Dispatcher 已知具体 Job 的 NPU 数量。此关联是针对**资源需求**，与 PL-D05 的 PR/nightly 优先级无关 |
+| 无法在放行前获得可靠的完整需求 | `ProfileUnknown`、服务容量描述缺失或多种需求无法区分 | 不得把 NPU 请求当零；NPU 服务停止肯定容量授予，显式记录等待原因。若改成 Runner 接单后在成员排队，必须单独说明**等待阶段已后移**，不能承诺 Runner 领取前完成排队 |
+
+**成员可行性（D）**：Dispatcher 只选**成员集群**。对 `single-pod`，必须有该成员内一个 Node 可满足 Pod 的全部资源及约束；对 `multi-pod-group`，必须有成员内一组满足各 Pod 请求、拓扑、同一运行环境、`minAvailable` 和完整并发数量要求的节点集合。36 卡是**任务总规模**，不能据此推断存在单台 36 卡 Node，也不能把两处不同成员的碎片拼成一个未经设计的跨成员 Gang。成员 Volcano 通过 PodGroup/Gang 等目标版本原生能力决定具体 Node 与同时启动；Dispatcher 对 Gang 只作**成员层容量估计与许可**，不实现成员节点级 Gang 算法。[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)；[Volcano PodGroup](https://volcano.sh/docs/concepts/podgroup/)。
+
+**资源授予与对账**：Dispatcher 对每个 Runner/Binding UID 记录 `profileVersion`、成员、资源族、各 Pod 请求/拓扑范围、授予状态；在目标 workload/PodGroup 创建后核对实际 Pod resources、数量、调度入口、Group 身份与配置版本。若缺少 PodGroup 或实际资源大于/不同于已准入的规格，标记 `ResourceMismatch`，阻止将此 grant 核销为已成功占用；由成员准入/工作负载控制器**按已定义的拒绝或保持 Pending 机制**处理，并由 Dispatcher 修正之后的成员容量判断。仅有 Dispatcher 的观测告警不能代替真实 Pod 准入保护。任务取消、失效或终态需要按 ARC/成员资源 UID 对账并释放 grant，不能创建第二个 GitHub Job。
+
+**边界与实例**：
+
+| 输入 | Dispatcher 成员准入 | 成员调度 |
+|---|---|---|
+| 单 Pod 请求 16 卡，成员 A 单 Node 最多 8 卡，成员 B 单 Node 有 16 卡 | 选 B；A 聚合空闲卡数即使超过 16 也不可用 | B kube-scheduler/Volcano 选择最终 Node |
+| 某 PR 需要 36 卡、由多 Pod 组成；候选成员 X 的多个节点在指定拓扑内可同时满足全组 | 按**各 Pod 和 PodGroup**评估 X，选择满足整组要求的成员 | X 的 Volcano 根据 Gang/PodGroup 最小运行数量及 Node 约束调度全组 |
+| 两成员分别有一部分 NPU，均不能满足完整的多 Pod 运行要求 | 保留 Binding 并记录 `NoFeasibleCluster`，不能直接跨成员拼接 | 不触发未经设计的跨成员 Gang |
+| 同一 Runner Service 对应不确定的 2 卡和 36 卡 Job | 不能单凭相同 `runs-on` 推断需求；必须先有单一可信 Profile 或资源需求关联契约 | 未经声明不得将 CPU Runner 就绪当作可运行 NPU Job |
+
+**剩余约束**：Profile 产生/生效的接口、是否采用成员 Node/Pod 快照或 Estimator、Volcano 对设备拓扑/Gang 的精确版本支持、工作流模板与运行环境均为后续细化参数；这些未确认不妨碍此设计说明责任与原则，但不能宣称当前 Manifest 已实现。依据：[GitHub ARC Kubernetes mode 与 runner-container-hooks](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets)、[Kubernetes Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)、[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)。
+
 ## 4.7 SP-09 跨功能质量与可服务性规格
 
 **场景：** 开发者发现一个 PR 排队很久，运维需要判定任务究竟卡在 GitHub 等待、Dispatcher Hold、Karmada 传播、成员 NPU 节点调度、JIT Secret 准备还是 Runner 注册。每个阶段必须提供明确的状态来源和可追踪标识，才能定位瓶颈及其责任组件。
