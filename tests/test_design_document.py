@@ -111,6 +111,18 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         self.assertEqual(len(fences) % 2, 0)
         self.assertGreaterEqual(self.design.count("```mermaid"), 15)
 
+    def test_reserve_node_granularity_and_gang_recovery(self):
+        self.assertIn("4.3.6.1 Reserve Node 的保护粒度", self.design)
+        self.assertIn("8 卡 Node", self.design)
+        self.assertIn("ReservationPartial", self.design)
+        self.assertIn("protectedNpuCardSeconds", self.design)
+        self.assertIn("| PL-18 |", self.design)
+        self.assertIn("| PL-19 |", self.design)
+        self.assertIn("| QA-15 ", self.design)
+        self.assertIn("| QA-16 ", self.design)
+        for fmea in ("F03-14", "F03-15", "F03-16"):
+            self.assertIn(fmea, self.design)
+
     def test_six_column_implementation_interface_tables(self):
         for n in range(1, 7):
             head = f"#### 5.{n}.6.1 接口设计"
