@@ -585,6 +585,7 @@ sequenceDiagram
     participant GH as GitHub / ARC
     participant D as Dispatcher
     participant K as Karmada Binding/Work
+    participant WL as 成员工作负载控制器
     participant MS as 成员 kube-scheduler / Volcano
     participant KLT as kubelet / NPU Device Plugin
     GH->>K: 创建 Runner Pod 和 ResourceBinding
@@ -593,8 +594,8 @@ sequenceDiagram
         D->>K: 放行 Binding，只指定成员 Cluster
         K->>MS: 分发 Runner Pod 与依赖
         MS->>MS: 为 Runner Pod 选择成员节点
-        Note over MS,GH: ARC Runner 接单后，hooks 可在成员创建 NPU workflow Pod
-        GH->>MS: workflow Pod 提交成员 API，携带 NPU 资源请求
+        Note over MS,GH: ARC Runner 接单；hooks 可创建 Job Container，成员可信控制器负责多机 NPU Workload
+        WL->>MS: 提交携带 NPU requests 的 Pod/PodGroup
         MS->>MS: Filter / Score / Bind NPU 节点
         MS->>KLT: 已绑定 Pod 进入 kubelet 设备分配
         KLT-->>GH: 容器运行，设备由插件暴露
@@ -1871,7 +1872,7 @@ sequenceDiagram
     end
     box rgb(255,240,222) Karmada 状态聚合
         participant EC as Execution Controller
-        participant RI as Lua ResourceInterpreter
+        participant RI as 状态解释器 / 来源适配（目标）
         participant CP as 控制面 Pod
     end
     box rgb(232,243,255) ARC 控制面判定
@@ -1883,8 +1884,9 @@ sequenceDiagram
     Note over Kubelet,EC: Karmada 控制器从成员 API 获取 Pod 状态，非 kubelet 直连 Karmada Controller
     Note over Kubelet,EC: 状态包含 containerStatuses 的容器名称、state 和 conditions
     EC->>RI: 聚合成员状态（statusItems）
-    RI->>RI: 执行 AggregateStatus
-    RI->>CP: 写回完整的 desiredObj.status
+    RI->>RI: 核验活动 Binding/Work 与唯一 Pod 来源
+    Note over RI,ARC: 目标契约；现有 Lua 无法单独证明身份或旧 Ready 已失效
+    RI->>CP: 写回经验证的 Pod.status，失效时撤销旧 Ready
     CP-->>ARC: 暴露容器名称和 Pod Ready Condition
     ARC->>CP: 读取聚合后的 Pod 状态
     CP-->>ARC: 返回完整的 Runner 状态
@@ -1999,6 +2001,7 @@ sequenceDiagram
     participant D as Dispatcher
     participant K as Karmada Binding / Work
     participant R as 成员 Runner / Hooks
+    participant W as 成员 NPU 工作负载控制器
     participant M as 成员 Volcano / kube-scheduler
     participant KL as kubelet / NPU Device Plugin
     ARC->>K: 创建 Runner Pod，形成待调度 Binding
@@ -2008,10 +2011,12 @@ sequenceDiagram
     D->>K: 选择一个成员，记录 grant 并放行 Binding
     K->>R: 传播 Runner Pod 和 JIT Secret
     ARC->>R: Runner 注册后分配 Job
-    R->>M: 创建真实申请 NPU 的 Pod
-    M->>M: 对 Node 资源、拓扑及优先级过滤并绑定
+    R->>W: 根据可信模板提交 NPU 工作负载需求
+    W->>M: 创建真实申请 NPU 的 Pod/PodGroup
+    M->>M: 按 Node/Gang 约束过滤并绑定
     M-->>D: 反馈真实 PodScheduled 与资源规格
     D->>D: 对账 Profile/grant 与实际 NPU 请求
+    M->>KL: 已绑定 NPU Pod 进入 kubelet
     KL->>KL: kubelet 通过 Device Plugin Allocate 分配设备
     KL-->>R: NPU Pod 运行并返回作业结果
 ```
@@ -2058,7 +2063,8 @@ sequenceDiagram
     participant P as Resource Profile
     participant D as Dispatcher
     participant K as Karmada Work
-    participant R as Runner / 工作负载控制器
+    participant R as 成员 Runner
+    participant W as 成员 NPU 工作负载控制器
     participant V as 成员 Volcano Gang
     participant N as 成员 NPU Nodes
     P-->>D: 多 Pod requests / minAvailable / 拓扑约束
@@ -2068,7 +2074,8 @@ sequenceDiagram
     else 整组可行
         D->>K: 放行唯一成员，记录整组容量授予
         K->>R: Runner 进入目标成员
-        R->>V: 提交关联的 NPU Pods 与 PodGroup
+        R->>W: 按可信 Profile 提交多机任务需求
+        W->>V: 创建关联的 NPU Pods 与 PodGroup
         V->>V: Gang 依据 minAvailable 与资源拓扑调度
         V->>N: 为每个 Pod 选择 Node 并绑定
         N-->>D: 上报实际 Pod/PodGroup 容量事实
