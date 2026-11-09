@@ -972,6 +972,8 @@ stateDiagram-v2
 | LC-05 删除收敛 | 删除请求被接受不代表 Pod、Work、成员 Secret 已清除；未核实副本时只可标记清理结果未知 |
 | LC-06 重复及乱序事件 | 按对象 UID、所属 Cluster、目标成员和各系统权威状态核对；不同集群 resourceVersion 不可相互比较 |
 | LC-07 无重放承诺 | 未经 GitHub/ARC 协议及业务幂等性证明，不承诺 exactly-once Job、无损迁移或任意失败自动重新执行 |
+| LC-08 ARC 可见状态来源 | 控制面 Runner Pod 的 Ready 必须来自当前 Binding 唯一目标成员、相同成员 Pod UID 且未过期的完整状态；不接受旧 Work/旧 UID/首个非空来源 | 
+| LC-09 主动失效与单写者 | 成员失联后无新事件时需要 TTL 主动重新评估并使 ARC 读取的旧 Ready 失效；状态聚合路径写者必须唯一。无法证明接口时标记 StateAuthorityUnknown，不能宣称 ARC/GitHub 被阻断 |
 
 **状态判定**：GitHub 是 Job 终态权威；ARC 是 Runner 实例及回收权威；Karmada 是传播目标和 Work 状态权威；成员 kubelet/Kubernetes 是 Pod 实际运行状态权威。控制面同步落后时保留来源、对象身份与时间，使用 Unknown/未确认表达不确定性，不以旧 Ready 推导当前可执行。
 
@@ -1182,7 +1184,7 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 | 某成员 Cluster/API/网络失联 | 该成员的分发、状态、删除确认不可靠 | 无关成员仍须按实际可用性分别判断；记录 `CleanupUnknown`，恢复后核对 | 不能仅凭控制面旧 Ready 认为正在执行，不能保证失联成员已销毁 Secret |
 | 成员节点资源/设备/镜像不可用 | 局部 Pod Pending 或运行失败 | 保留 Node、Pod、FailedScheduling/FailedMount/镜像事件，遵守硬资源约束 | 不将 CPU 或不兼容 NPU 自动作为替代 |
 | Token/CA/RBAC 出错 | 控制面操作失败或权限风险 | 分类 DNS/TLS/401/403，恢复最小授权身份及可信链 | 不能通过关闭 TLS 或升级为管理员权限绕过 |
-| 状态聚合错误/延迟 | ARC 可能错误理解 Pod 状态 | 以成员真实状态与唯一目标对象核查；无法判断则 Unknown | 现有 Lua 首个非空来源不能证明多来源安全 |
+| 状态聚合错误/延迟 | ARC 可能读取过期 Pod Ready | 按 ST-D02 判断目标成员、成员 UID、新鲜度和主动失效；目标版本无法保证 ARC 可见写入时停止相关新放行并报警 | 当前 Lua 首个非空不满足目标；GitHub Runner 已注册状态需要独立核对 |
 
 **故障隔离：** 成员失联时，其他成员能否承接新 Runner 取决于管理面、成员资格及可用容量。运行中的 Job 不具备跨成员无损迁移保证；在确认业务幂等性之前，集成层不得自行重派 Job。恢复时间、冗余规模及可用性目标仍需明确。
 
@@ -1230,6 +1232,7 @@ F-01～F-06 的接口和质量约束由 SP-01～SP-09 统一规定；故障影�
 | QA-14 多节点 Gang 可行性 | 总共需要 36 卡的多 Pod 工作负载，某成员聚合卡数充足但节点间拓扑不满足完整请求 | Dispatcher 判断**同成员整组**资源与拓扑可行性；成员 Volcano PodGroup/Gang 做最终 Node 调度；不足时保持不可调度 | 不要求单个 36 卡 Node，也不允许跨独立成员拼接 Gang；F06-05、SR-06-02 |
 | QA-15 保护粒度与回填安全 | 8 卡 Node 为 2 卡任务保护，剩余 6 卡表面空闲 | PL-18：Node NoSchedule 以整 Node 阻止普通新 Pod；Dispatcher 只在其他未保护 Node 上 Backfill，并记录保护卡时开销 | Taint 不等于卡级预约，不能把 6 卡视作可安全回填或已运行卡时；F03-14 |
 | QA-16 Gang 预留失败恢复 | Dispatcher 为多 Pod Gang 保护 3 台 Node，第 3 台失败，Leader 随后失联 | PL-19：整组 ReservationPartial，按身份/租约回滚已保护 Node；新 Leader 和 Janitor 对账清理 | 不宣称部分成功即完整保护；不能清理其他调度器的 Taint；F03-15/16 |
+| QA-17 ARC 可见旧 Ready 的主动失效 | 成员 A 曾 Ready 后失联；控制面 Pod 缓存 A 的 Ready，而该成员没有后续状态事件 | ST-D02：唯一状态仲裁者按 Binding/UID、新鲜度与 TTL 主动确认来源，使 ARC 可见旧 Ready 在授权写入路径中失效；若不能修改可见状态则标记 StateAuthorityUnknown 并限制新放行 | 平台诊断 StatusUnknown 不等于 ARC Pod.status 已安全，也不能断言 GitHub 已连接 Runner 停止接单；F05-04/05、LC-08/09 |
 
 **可评审性门槛**：PL-D03～06 明确联邦 FIFO/Reserve/Backfill、跨租户公平、成员 Volcano PriorityClass 与降级设计，**当前 Manifest 不包含 Dispatcher 和 NPU 优先级模板**。后续必须对照实际 NPU Pod、Volcano Scheduler 插件及调度动作确认；不再要求 PR/nightly 放行前 Job→Runner→Binding 关联。设计不证明端到端排队 SLA。
 
@@ -1960,10 +1963,10 @@ sequenceDiagram
 | 交互双方 | 原生接口或资源 | 输入、操作与输出 | 权限与前置条件 | 异常处理与限制 | 依据及规格 |
 |---|---|---|---|---|---|
 | 成员 kubelet 与 Karmada | Kubernetes `Pod.status` | 成员 Kubernetes 提供 `phase`、`conditions`、`containerStatuses` 和容器运行信息。 | Karmada 必须能读取目标成员 Pod 的状态。 | 状态未返回时应保留未确认状态，不得生成不存在的容器状态。 | KAR-3；SP-06 |
-| Karmada 状态解释器与控制面 Pod | `ResourceInterpreterCustomization` 的 `AggregateStatus` | Lua 规则必须将单目标成员的必要 Pod 状态字段写入控制面对象。 | 目标对象为 `apiVersion: v1`、`kind: Pod`；来源必须与选定执行成员一致。 | 没有状态时不能伪造 Ready；出现多个状态来源时必须有明确的选择规则。 | KAR-3；SP-06 |
+| 状态仲裁者与 ARC 可见 Pod.status | `ResourceInterpreterCustomization` / `ResourceInterpreterWebhookConfiguration` 的 `AggregateStatus`（目标候选） | 按当前 Binding/Work 成员、成员 Pod UID 与新鲜度选择完整 Pod 状态，经过唯一写入路径供 ARC 读取。 | Declarative Lua 优先于 Webhook，目标部署必须移除同操作冲突；版本需证明身份输入、状态回写和主动失效。 | Webhook 只是扩展点候选，不能凭增加 Webhook 保证旧 Ready 撤销或 ARC/GitHub Runner 停止接单；见 ST-D02。 | KAR-3；ST-D01/D02 |
 | ARC Controller 与 Pod 状态 | Kubernetes Pod 读取或监听操作 | ARC 读取 Runner 容器名称、容器状态与 Pod Ready 条件。 | Controller 必须具有读取对应 Pod 的权限。 | 字段缺失时不能假定 Runner 已就绪；必须提供状态与事件诊断。 | ARC-1；SP-06 |
 
-**配置责任：** 状态适配组件维护 `ResourceInterpreterCustomization`，保留 ARC 使用的状态字段。
+**配置责任：** 状态适配组件维护唯一的 ARC 可见状态聚合路径、来源身份和主动失效契约；若采用 Webhook，应先消除同 GVK/同操作 Lua 优先级冲突，再核对 Status 读写权限、失联 TTL 和 ARC 读取字段。GitHub Runner 注册/接单仍由 GitHub/ARC 独立决定。
 
 ### 5.5.9 DFX分析
 
@@ -1976,6 +1979,8 @@ sequenceDiagram
 | F05-01 | 状态解释器遗漏容器名称或 Ready 条件。 | ARC 可能把 Runner 判定为未就绪。 | 逐项比较成员和控制面 Pod 的状态字段。 | 状态适配维护者必须保留 ARC 所需字段并检查映射规则。 | 状态适配维护者 |
 | F05-02 | 同一个 Pod 出现多个互相冲突的状态来源。 | 控制面可能显示错误成员的状态。 | 核对 Binding 的目标成员与各来源 Pod 的标识。 | 设计必须先定义状态来源规则；不得静默采用第一个非空状态。 | 状态适配与 Karmada 管理者 |
 | F05-03 | 成员状态同步延迟。 | Runner 就绪信息不能及时反映到控制面。 | 比较 Pod 条件时间和控制面状态更新时间。 | 平台应根据批准的时效性目标设计告警，不能填写未经定义的 SLA。 | Karmada、ARC 运维 |
+| F05-04 | 成员失联后不再产生状态更新，旧 Ready 持续缓存在控制面。 | ARC 可能读取不可信 Ready，错误推进 Runner 生命周期。 | 当前目标成员/UID、新鲜度 TTL、聚合输出与控制面 Pod.status 比较。 | ST-D02：定义主动失效责任与单一 ARC 可见状态写入路径；无法实现时停止受影响成员新放行并标记 StateAuthorityUnknown。 | 状态仲裁/联邦控制面维护者 |
+| F05-05 | 只修复 Pod Ready 却把 GitHub Runner 注册与 Job 接单误作已禁止。 | 仍连接 GitHub 的 Runner 可能继续接单，误触发跨成员复制。 | 对照 GitHub Runner Idle/Active/Offline、ER/Runner ID 和成员状态。 | ST-D02：隔离 GitHub Runner 的独立权威；禁止集成层自行复制未确认 Job；更强接单阻断需要独立接口。 | ARC/GitHub 集成维护者 |
 
 **风险—措施—验证追踪**（关联：SR-05-01、SR-NF-03/04；延续上方 FMEA 编号，不替代已有故障表）
 
@@ -1984,8 +1989,10 @@ sequenceDiagram
 | F05-01 | 状态聚合遗漏容器名/Ready 条件 | ARC 误判未就绪、误清理 Runner | 高 | SP-06 保留 ARC 实际读取的 Pod 状态字段 | 对比成员 Pod 与控制面字段集合，缺失不得伪造就绪 | Karmada 传输延迟仍存在 |
 | F05-02 | 多来源冲突或旧状态覆盖新目标 | 错误 Ready、异常生命周期推进 | 严重 | LC-02/LC-06 先按 Binding 目标成员和对象 UID 过滤，无法唯一确认则 Unknown | 多来源时不能静默取首个非空；现有 Lua 标为未满足目标设计 | 目标版本 statusItems 可见身份字段及扩展点仍需确认 |
 | F05-03 | 成员与控制面状态同步延迟 | Runner 就绪延迟/误判 | 中 | LC-04 区分成员真实状态和异步聚合；附来源及观测时间 | 控制面旧 Ready 不得证明当前成员可执行；有状态滞后诊断路径 | 同步性能目标待业务批准 |
+| F05-04 | 事件停止后旧 Ready 不会主动失效，或解释器存在两个并行写者 | 不可信 Runner Pod 被 ARC 误判为 Ready | 严重 | ST-D02、LC-08/09：目标 UID/成员匹配、TTL 主动失效、单写者；Lua 与 Webhook 同操作不可并行无约束使用 | 成员无新事件且健康失效时，ARC 可见控制面 Pod.status 不应长期保留旧 Ready；若不可实现则标注版本缺口并保守停止放行 | Karmada 状态扩展、失效定时调谐及 ARC 读取路径尚需版本确认 |
+| F05-05 | 将 Pod 状态失效等同于 GitHub Runner 离线或停止接单 | 重复 Runner/Job、错误迁移 | 严重 | ST-D02 区分 GitHub Runner Idle/Active/Offline、ARC ER 与 Karmada Pod 状态 | Pod Ready 被撤回并不自动证明 GitHub Runner 断连；旧 Runner 在线且 Job 未终态不能额外重派 | 端到端禁止接单可能需要 GitHub/ARC 扩展协议 |
 
-**运行诊断与敏感信息处理**：排障时比较目标成员与控制面 Pod 的 UID、容器状态和 Ready 条件。状态来源发生冲突时必须先确认目标成员，不能静默取第一个来源。
+**运行诊断与敏感信息处理**：排障对比目标成员、Binding/Work、控制面 Pod UID、成员 UID、状态观察时间、失效 TTL、解释器类型/优先级和真实 ARC 可见 Ready，再独立关联 GitHub Runner Idle/Active/Offline；没有来源证明时不静默选第一份状态。日志不保存 GitHub 凭证、JIT Secret 原文。
 
 
 
@@ -2229,7 +2236,7 @@ F-01～F-06 的接口条件、调用主体和异常处理汇总如下。ARC、Ka
 
 | 能力 | 现有配置或目标机制 | 待确认事项 |
 |---|---|---|
-| 多来源状态聚合 | 当前 Lua 选择首个非空状态 | Karmada 目标版本能否提供目标成员/Pod 身份及冲突筛选接口 |
+| ARC 可见状态仲裁与主动失效 | ST-D02：唯一活动目标/成员 Pod UID、新鲜度 TTL、单一写入路径，独立核对 GitHub Runner 状态 | Karmada 目标版本 AggregatedStatus 输入、Lua/Webhook 优先级与身份查询、无事件下主动失效及 ARC-visible Pod.status 写入/读取路径需确认；无强保证时保守限制新放行 |
 | Controller/Listener 权限 | Controller 仍使用高权限 kubeconfig | ARC 目标版本所需最小 Kubernetes API 权限、Token 更新行为 |
 | JIT Secret 传播与回收 | Karmada `propagateDeps` | 引用识别范围、成员副本删除确认 |
 | NPU 成员准入 | Dispatcher 基于 Runner Service Profile（PL-D07）做完整工作负载成员容量判断，成员 Volcano 调度真实 Pod/PodGroup | Profile 发布、可信服务身份、设备拓扑与成员 Node/Gang 可行性及容量估计仍需接口确认 |
