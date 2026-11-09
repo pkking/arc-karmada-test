@@ -184,6 +184,42 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         self.assertIn("ResourceInterpreterCustomization", self.design)
         self.assertNotIn("文档完成不要求 PoC", self.design)
 
+    def test_pre_dispatch_resource_profile_contract(self):
+        # A fixed Runner Service supplies a trusted profile before ARC assigns a Job.
+        for clause in (
+            "同一 Runner Service 在某一 Profile 版本的生效范围内只接纳一种完整的 NPU 资源规格",
+            "不同规格应由不同的可信 Runner Service/Profile 承载",
+            "默认 ARC 扩容事件不提供可信的逐 Job 需求",
+            "唯一 Job→Runner/Binding 关联",
+            "ProfileUnknown",
+            "放行前的正确性约束",
+        ):
+            self.assertIn(clause, self.design)
+
+    def test_job_pod_and_gang_boundary_contract(self):
+        for clause in (
+            "Runner Pod、Job Container Pod 与 NPU Workload Pod/PodGroup",
+            "Kubernetes mode 不自动等于多机 Gang 支持",
+            "跨节点条件",
+            "成员 NPU 工作负载控制器",
+            "无需与 CPU Runner 固定同节点",
+        ):
+            self.assertIn(clause, self.design)
+        self.assertIn("W->>V: 创建关联的 NPU Pods 与 PodGroup", self.design)
+
+    def test_status_source_identity_and_stale_ready_contract(self):
+        for clause in (
+            "LC-08 Ready 来源有效性",
+            "Ready --> StatusUnknown",
+            "StatusUnknown --> Ready",
+            "statusItems",
+            "仅增加监控侧 StatusUnknown 不满足 LC-08",
+            "F05-04",
+            "F05-05",
+        ):
+            self.assertIn(clause, self.design)
+        self.assertNotIn("当前 Lua 能确保旧 Ready 自动失效", self.design)
+
     def test_governance_and_readme_are_unified(self):
         target = "docs/ASCEND-CI-FEDERATED-CLUSTER-FUNCTIONAL-DESIGN.md"
         self.assertIn(target, (ROOT / "README.md").read_text(encoding="utf-8"))
