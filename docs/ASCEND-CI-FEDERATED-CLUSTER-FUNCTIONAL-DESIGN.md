@@ -105,10 +105,10 @@
 
 | 编号 | 定义与粒度 | 使用范围 |
 |---|---|---|
-| **IR** | 功能级需求：描述平台必须提供的独立业务能力 | IR-01～IR-04 为能力需求；与 F 功能实现单元可多对多关联，不把上游组件直接当作 IR |
-| **FT** | 功能域特性：对外可感知的能力归类 | FT-01～FT-04 组织 IR 和 SR，不替代需求验收 |
+| **IR** | 功能级需求：描述平台必须提供的独立业务能力 | IR-01～IR-05 为能力需求；与 F 功能实现单元可多对多关联，不把上游组件直接当作 IR |
+| **FT** | 功能域特性：对外可感知的能力归类 | FT-01～FT-05 组织 IR 和 SR，不替代需求验收 |
 | **SR** | 场景级需求：描述某一条件下必须实现的行为与验收依据 | SR-xx-xx 和 SR-NF-xx；一个 IR 可关联多个 SR |
-| **UC** | 用例：具有参与者、前置条件、主/异常路径的行为场景 | UC-01～UC-13；一个 SR 可由多个 UC 展示 |
+| **UC** | 用例：具有参与者、前置条件、主/异常路径的行为场景 | UC-01～UC-14；一个 SR 可由多个 UC 展示 |
 | **F** | 功能实现单元：第 5 章可独立评审的设计职责 | F-01～F-06 均为功能设计单元，F-06 对应 NPU 容量与调度核心需求 |
 | **AR** | 迭代实现/合入单元：由已批准 SR 分解得到的最小实现变更 | 尚未分配编号 |
 | **SP** | 跨功能域设计规格：多个 F 共同遵守的行为/接口约束 | SP-01～SP-09 在第 4 章定义，供第 5 章引用 |
@@ -1043,9 +1043,12 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 
 **设计决策（D）**：联邦容量准入以**平台可信的 Runner Service Resource Profile（以下简称 Profile）**为依据，不以 CPU Runner Pod 的 `resources.requests` 推算未来的 NPU 需求。Profile 是设计层的资源规格，不是 GitHub、ARC 或 Karmada 已存在的标准 CRD。平台通过服务目录将 Runner Service 标识映射到 Profile 及其版本，Dispatcher 在放行 Runner Binding **之前**获得此声明；成员真实 NPU Pod/PodGroup 的资源约束必须与之匹配。
 
+**主路径选择（D）**：同一 Runner Service 在某一 Profile 版本的生效范围内只接纳一种完整的 NPU 资源规格（包括每个 Pod 的资源请求、PodGroup 规模、拓扑与调度约束）；跨成员共用服务标识与 `runs-on`，不把成员名称写进工作流。不同规格应由不同的可信 Runner Service/Profile 承载，允许使用不同的规格标签但不要求开发者指定集群。只有所有可能匹配该 Scale Set 的 Job 都符合相同规格时，`runnerServiceId → profileVersion` 才足以让 Dispatcher 在 Runner 接单前判断容量。此规则不要求 ARC 在扩容时提供具体 Job ID，也不把 `runs-on` 标签本身视为资源真实性证明。
+
 | 逻辑字段 | 来源与语义 | 设计约束 |
 |---|---|---|
-| `runnerServiceId`, `profileVersion` | 经授权的 Runner Service/Scale Set 配置和平台发布的不可变 Profile 版本 | `runs-on` 用来选择 Runner 服务，**不直接包含 NPU 需求数量**；不能仅信任 PR 可修改的标签 |
+| `runnerServiceId`, `profileVersion` | 经授权的 Runner Service/Scale Set 配置和平台发布的不可变 Profile 版本 | `runs-on` 用来选择 Runner 服务，**不直接包含 NPU 需求数量**；平台校验该服务可接受的 Job 规格与 Profile 一致，不能仅信任 PR 可修改的标签 |
+| `demandSource`, `demandBinding`（逻辑契约） | 固定服务规格，或可信的 Job→Runner/Binding 需求映射 | 固定规格无须 Job ID；动态规格必须在 Binding 放行前给出唯一需求、来源身份与版本，不能用默认 ARC 扩容事件冒充 Job 级关联 |
 | `deviceResourceName`, `deviceFamily` | 成员 Device Plugin 扩展资源名、受支持的设备型号与资源族 | Profile 必须与目标成员 Node `allocatable` 中的真实扩展资源匹配；不同设备型号不能无约束互换 |
 | `workloadShape` | `single-pod` 或 `multi-pod-group` | 单 Pod 应在成员单个 Node 上完整放置；多 Pod 以同成员的整组请求及 gang 最小同时运行要求做容量判断 |
 | `podRequests[]`, `minAvailable` | 各 Pod 的 NPU/CPU/内存请求、Pod 数量及多 Pod 同时就绪下限 | 对多 Pod 不能只声明聚合卡数；`minAvailable` 只能表达经过批准的最小可运行组，不能把需要全组启动的任务降为部分启动 |
@@ -1060,6 +1063,13 @@ Device Plugin 发布扩展资源（U）。平台 Runner Service Profile 在放�
 | 一个 Runner Service 只对应一种稳定资源规格 | 平台维护的可信 `runnerServiceId → profileVersion` | **目标主路径**：Dispatcher 以 Profile 对目标成员做容量准入，成员执行 Pod 按同规格申请资源 |
 | 多个 Job 共用相同 `runs-on`，但 NPU 数量或多机拓扑不同 | ARC 默认 Runner 扩容/Pod 创建不必携带具体尚未分配的 Job 资源需求 | 只有额外的**可信、放行前可关联的资源需求契约**才能精确预准入；否则不能假装 Dispatcher 已知具体 Job 的 NPU 数量。此关联是针对**资源需求**，与 PL-D05 的 PR/nightly 优先级无关 |
 | 无法在放行前获得可靠的完整需求 | `ProfileUnknown`、服务容量描述缺失或多种需求无法区分 | 不得把 NPU 请求当零；NPU 服务停止肯定容量授予，显式记录等待原因。若改成 Runner 接单后在成员排队，必须单独说明**等待阶段已后移**，不能承诺 Runner 领取前完成排队 |
+
+**放行前的正确性约束（D）**：
+
+1. 服务管理员负责发布、授权和版本化 Profile，维护者负责确保可匹配的工作流声明与实际执行资源规格一致；PR 自身不能修改平台信任的 Profile 或通过更换同服务内的 Pod 规格绕过配额。
+2. Dispatcher 在 Binding 放行前检查 `runnerServiceId`、`profileVersion`、完整的 `podRequests[]`、`minAvailable`、成员授权及拓扑；将版本与当前 Runner/Binding UID 一同写入 grant。Profile 变更不重解释已放行的授予。
+3. 如果业务必须让同一 `runs-on` 匹配多个规格，需先设计额外的可信需求来源、唯一 Job→Runner/Binding 关联、重试/取消时的版本与身份延续；未建立之前不能声称支持逐 Job 的 NPU 预准入。
+4. `ProfileUnknown`、冲突或规格不完整时保持 Binding Hold 并向平台运维报告原因，不得按 0 卡或最小规格放行，也不得把等待转移到已接单 Runner 而仍宣称符合接单前准入目标。
 
 **成员可行性（D）**：Dispatcher 只选**成员集群**。对 `single-pod`，必须有该成员内一个 Node 可满足 Pod 的全部资源及约束；对 `multi-pod-group`，必须有成员内一组满足各 Pod 请求、拓扑、同一运行环境、`minAvailable` 和完整并发数量要求的节点集合。36 卡是**任务总规模**，不能据此推断存在单台 36 卡 Node，也不能把两处不同成员的碎片拼成一个未经设计的跨成员 Gang。成员 Volcano 通过 PodGroup/Gang 等目标版本原生能力决定具体 Node 与同时启动；Dispatcher 对 Gang 只作**成员层容量估计与许可**，不实现成员节点级 Gang 算法。[Volcano Gang](https://volcano.sh/docs/scheduler/plugins/gang/)；[Volcano PodGroup](https://volcano.sh/docs/concepts/podgroup/)。
 
@@ -1937,7 +1947,7 @@ F-06 负责将 Runner Service 的预调度 NPU 需求转换为成员容量准入
 
 ### 5.6.3 实现思路
 
-**需求声明**：平台 Runner Service 提供可信的 `Resource Profile` 及版本；Dispatcher 以此进行成员级容量判断，绑定到 Runner/Binding UID。**执行资源事实**：在 ARC Kubernetes container mode 中，Runner Pod 可只使用 CPU；Runner 接到 Job 后由 hooks/工作负载控制器在成员创建实际 NPU Pod（或多 Pod 工作负载）；不用 container mode 时，Runner Pod 本身可以申请 NPU。NPU 设备请求必须来自实际 Pod 的 `resources`，不能把 CPU Runner 的 Ready 当作 NPU 资源已占用。
+**需求声明**：平台为同一 `runnerServiceId` 配置单一可信 `Resource Profile` 及版本，并保证该 Runner Service 接受的全部 Job 使用同一种完整的 NPU 请求形态。不同规格对应不同逻辑服务，但同一规格跨成员使用统一 `runs-on`。Dispatcher 在放行 Runner Binding 前取得 Profile，将身份、版本与 Runner/Binding UID 绑定；默认 ARC 扩容事件不提供可信的逐 Job 需求。只有引入可验证的 Job→Runner/Binding 关联契约，才允许一个服务内有多种 NPU 规格。**执行资源事实**：在 ARC Kubernetes container mode 中，Runner Pod 可只使用 CPU；Runner 接到 Job 后由 hooks/工作负载控制器在成员创建实际 NPU Pod（或多 Pod 工作负载）；不用 container mode 时，Runner Pod 本身可以申请 NPU。NPU 设备请求必须来自实际 Pod 的 `resources`，不能把 CPU Runner 的 Ready 当作 NPU 资源已占用。
 
 **两种调度形态**：
 
