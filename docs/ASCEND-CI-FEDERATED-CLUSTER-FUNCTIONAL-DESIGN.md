@@ -14,7 +14,7 @@
 
 **包含：** ARC 与 Karmada 的联邦集成，包括统一 Runner 入口、成员范围配置、Runner Pod 传播、JIT Secret 依赖传播、Listener 跨控制面认证、成员 Pod 状态反馈和临时资源回收。
 
-**不包含：** 独立联邦调度器、跨成员容量账本、跨租户公平队列、FIFO/Reserve Node/Backfill、跨成员 NPU 容量准入、NPU 拓扑选择、跨成员 Gang 调度、GitHub Job 队列管理和运行中 Job 无损迁移。
+**不包含：** 自定义跨成员调度器、跨成员容量账本、跨租户公平队列、FIFO/Reserve Node/Backfill、跨成员 NPU 容量准入、NPU 拓扑选择、跨成员 Gang 调度、GitHub Job 队列管理和运行中 Job 无损迁移。
 
 **成员职责：** NPU 工作负载的资源请求、设备插件、驱动/CANN、Volcano/Gang 和节点拓扑由成员集群负责。本仓库只定义 Runner 联邦放置所需的集成约束，不替代成员调度栈。
 
@@ -68,7 +68,7 @@ GitHub 负责 Job 匹配和执行结果；ARC 负责 Runner 生命周期；Karma
 
 **FT-01 统一入口与资源共享。** vLLM 开发者保留原有工作流标签；Runner 可在授权的 vLLM-Omni 等成员集群运行，开发者无须选择集群。
 
-**FT-02 策略约束的成员放置。** 平台通过 PropagationPolicy 定义 Runner Pod 的候选成员范围，由 Karmada Scheduler 根据策略和成员状态选择目标成员。该能力不提供跨成员 FIFO、公平队列或 NPU 容量预留。
+**FT-02 策略约束的成员放置。** 平台通过 PropagationPolicy 定义 Runner Pod 的候选成员范围，由 Karmada Scheduler 根据策略和成员状态选择目标成员。该能力仅提供策略约束下的成员选择，不提供跨成员公平队列或 NPU 容量预留。
 
 **FT-03 跨控制面执行。** 被放置到其他成员的 Runner 必须获得对应 JIT 注册信息，且 Listener 能访问 Karmada API、运行状态能反馈给 ARC；未就绪 Runner 不应报告为可执行。
 
@@ -100,7 +100,7 @@ GitHub 负责 Job 匹配和执行结果；ARC 负责 Runner 生命周期；Karma
 | IR-02 可控成员放置 | UC-05 成员选择；UC-10 无合格成员 | SR-03-01 | FT-02；F-03 |
 | IR-03 跨控制面执行 | UC-06 凭证未就绪；UC-08 访问控制；UC-09 状态反馈 | SR-03-02、SR-04-01、SR-05-01 | FT-03；F-03～F-05 |
 | IR-04 临时资源回收 | UC-04 作业结束；UC-12 状态或清理异常 | SR-02-02 | FT-04；F-02、F-03、F-05 |
-| IR-04 成员执行环境兼容 | UC-07 Runner 执行；UC-13 成员环境不兼容；UC-14 成员内多节点工作负载 | SR-06-01～03 | FT-05；F-03、F-06 |
+| IR-05 成员执行环境兼容 | UC-07 Runner 执行；UC-13 成员环境不兼容；UC-14 成员内多节点工作负载 | SR-06-01～03 | FT-05；F-03、F-06 |
 
 **用例概览：**
 
@@ -475,7 +475,7 @@ Karmada 的成员选择基于其支持的调度字段、成员状态和传播策
 | 单一候选成员 | 固定执行集群或隔离场景 | 放置确定性高，但不能利用其他成员 |
 | 多成员 ClusterAffinity | 允许 Runner 在多个成员执行 | 由 Karmada Scheduler 选择；结果遵循其版本和配置语义 |
 | Divided / Weighted | 适用于具有副本语义且目标版本支持的资源 | 不用于声称多个独立 Runner Pod 按轮询或权重分配 |
-| 自定义 Dispatcher / 公平队列 | 属于独立的联邦调度产品能力 | 不在本仓库范围，不作为 ARC + Karmada 集成依赖 |
+| 自定义跨成员调度器 / 公平队列 | 属于独立的联邦调度产品能力 | 不在本仓库范围，不作为 ARC + Karmada 集成依赖 |
 
 **设计结论：** 本仓库采用 PropagationPolicy 限定候选成员，由 Karmada Scheduler 选择 Runner Pod 的目标成员。策略字段及行为以仓库锁定的 Karmada CRD/API 版本为准。
 
