@@ -156,6 +156,18 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertIn("Volcano", label_text, filename)
             self.assertNotIn("原型验证", label_text, filename)
 
+    def test_system_context_diagram_matches_repository_boundary(self):
+        svg = DOC.parent / "images" / "federation-system-context.svg"
+        root = ET.parse(svg).getroot()
+        label_text = " ".join((node.text or "") for node in root.iter())
+        for element in ("GitHub Actions", "ARC Runner 管理", "Listener",
+                        "Controller", "Karmada 联邦控制", "PropagationPolicy",
+                        "成员集群 A", "成员集群 B", "镜像仓库",
+                        "身份与密钥", "GitOps 配置管理", "观测与审计"):
+            self.assertIn(element, label_text)
+        self.assertNotIn("Dispatcher", label_text)
+        self.assertIn("Volcano", label_text)
+
     def test_every_diagram_has_caption_below_and_next_line_explanation(self):
         lines = self.design.splitlines()
         image_lines = [i for i, line in enumerate(lines)
@@ -169,7 +181,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
                 mermaid_ends.append(i)
                 inside = False
         self.assertFalse(inside)
-        self.assertEqual(len(image_lines), 5)
+        self.assertEqual(len(image_lines), 6)
         self.assertGreaterEqual(len(mermaid_ends), 18)
         for i in image_lines + mermaid_ends:
             later = [line for line in lines[i + 1:] if line.strip()]
