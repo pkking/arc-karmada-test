@@ -278,7 +278,7 @@ flowchart LR
 
 ![联邦调度执行系统逻辑架构](images/federation-layered-architecture.svg)
 
-<p align="center">图 3-4 联邦调度执行子系统的目标分层架构</p>
+<p align="center">图 3-2 联邦调度执行子系统的目标分层架构</p>
 
 说明：跨成员资源控制与成员 Node/Gang 调度分别由 Dispatcher 和 Volcano 负责。
 
@@ -300,6 +300,12 @@ flowchart LR
 
 
 ### 3.4.2 周边依赖
+
+![ARC + Karmada 联邦集成功能域与周边系统关系](images/federation-system-context.svg)
+
+<p align="center">图 3-3 ARC + Karmada 联邦集成功能域与周边系统关系</p>
+
+说明：本仓库范围为 ARC 与 Karmada 的联邦集成。GitHub Actions、成员 Kubernetes、镜像仓库、身份与密钥、GitOps、观测与审计为周边系统。Listener 逻辑上属于 ARC，部署于指定成员并通过 TLS、Token 和 CA 访问 Karmada API。Karmada 根据 PropagationPolicy 选择成员并传播 Runner Pod 与 JIT 依赖；成员 Kubernetes 执行 Runner 并回传 Pod 状态。**本仓库不包含独立 Dispatcher。**
 
 | 周边元素 | 职责关系 | 进入/输出的实体 | 约束 |
 |---|---|---|---|
@@ -325,7 +331,7 @@ erDiagram
   WORK }o--|| MEMBER_CLUSTER : "定向交付"
 ```
 
-<p align="center">图 3-2 领域对象与联邦身份关系</p>
+<p align="center">图 3-4 领域对象与联邦身份关系</p>
 
 说明：业务身份关联不等于 Kubernetes OwnerReference，实际所有权以目标版本 API 为准。
 

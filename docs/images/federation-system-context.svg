@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-label="ARC 与 Karmada 联邦集成功能域及 GitHub Actions、成员 Kubernetes、镜像仓库、身份密钥、GitOps 和观测审计系统的关系">
+<defs>
+  <marker id="arr" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M1 1 L9 5.5 L1 10" fill="none" stroke="#647d8d" stroke-width="1.8"/></marker>
+  <marker id="dash" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M1 1 L9 5.5 L1 10" fill="none" stroke="#91aab7" stroke-width="1.8"/></marker>
+</defs>
+<rect width="1600" height="900" fill="#ffffff"/>
+<g font-family="Noto Sans CJK SC, Microsoft YaHei, PingFang SC, sans-serif">
+  <text x="800" y="52" font-size="32" fill="#203749" font-weight="700" text-anchor="middle">ARC + Karmada 联邦集成功能域与周边系统关系</text>
+  <text x="800" y="85" font-size="19" fill="#526c7b" text-anchor="middle">ARC 管理 Runner 生命周期 · Karmada 负责成员放置与资源传播 · 成员 Kubernetes 执行 Runner</text>
+
+  <rect x="45" y="345" width="235" height="120" rx="14" fill="#f5f8fb" stroke="#bed0da" stroke-width="2.5"/>
+  <text x="162" y="383" font-size="25" fill="#3e5362" font-weight="700" text-anchor="middle">GitHub Actions</text>
+  <text x="162" y="415" font-size="18" fill="#526c7b" text-anchor="middle">Job queue / runs-on</text>
+  <text x="162" y="441" font-size="17" fill="#526c7b" text-anchor="middle">Runner 注册 / Job 结果</text>
+
+  <rect x="315" y="150" width="820" height="590" rx="16" fill="#ffffff" stroke="#bed0da" stroke-width="2.5"/>
+  <text x="345" y="188" font-size="23" fill="#31546f" font-weight="700">本仓库功能域：ARC + Karmada 联邦集成</text>
+
+  <rect x="345" y="205" width="350" height="205" rx="13" fill="#edf5f8" stroke="#aac4d3" stroke-width="2.5"/>
+  <text x="520" y="242" font-size="24" fill="#27465b" font-weight="700" text-anchor="middle">ARC Runner 管理</text>
+  <rect x="365" y="270" width="145" height="95" rx="10" fill="#ffffff" stroke="#aac4d3" stroke-width="2"/>
+  <text x="437" y="304" font-size="20" fill="#27465b" font-weight="700" text-anchor="middle">Listener</text>
+  <text x="437" y="330" font-size="15" fill="#526c7b" text-anchor="middle">Job polling / ERS</text>
+  <text x="437" y="350" font-size="14" fill="#526c7b" text-anchor="middle">指定成员运行</text>
+  <rect x="530" y="270" width="145" height="95" rx="10" fill="#ffffff" stroke="#aac4d3" stroke-width="2"/>
+  <text x="602" y="304" font-size="20" fill="#27465b" font-weight="700" text-anchor="middle">Controller</text>
+  <text x="602" y="330" font-size="15" fill="#526c7b" text-anchor="middle">Runner 生命周期</text>
+  <text x="602" y="350" font-size="14" fill="#526c7b" text-anchor="middle">创建 / 扩缩 / 回收</text>
+  <text x="520" y="395" font-size="16" fill="#526c7b" text-anchor="middle">RunnerScaleSet · EphemeralRunnerSet · EphemeralRunner</text>
+
+  <rect x="720" y="205" width="390" height="205" rx="13" fill="#e7f5ed" stroke="#85b49c" stroke-width="2.5"/>
+  <text x="915" y="242" font-size="24" fill="#146440" font-weight="700" text-anchor="middle">Karmada 联邦控制</text>
+  <rect x="740" y="270" width="105" height="85" rx="9" fill="#ffffff" stroke="#85b49c" stroke-width="2"/>
+  <text x="792" y="304" font-size="18" fill="#146440" font-weight="700" text-anchor="middle">API Server</text>
+  <text x="792" y="330" font-size="14" fill="#526c7b" text-anchor="middle">CRD / API</text>
+  <rect x="860" y="270" width="105" height="85" rx="9" fill="#ffffff" stroke="#85b49c" stroke-width="2"/>
+  <text x="912" y="304" font-size="18" fill="#146440" font-weight="700" text-anchor="middle">Scheduler</text>
+  <text x="912" y="330" font-size="14" fill="#526c7b" text-anchor="middle">成员放置</text>
+  <rect x="980" y="270" width="110" height="85" rx="9" fill="#ffffff" stroke="#85b49c" stroke-width="2"/>
+  <text x="1035" y="304" font-size="18" fill="#146440" font-weight="700" text-anchor="middle">Controllers</text>
+  <text x="1035" y="330" font-size="14" fill="#526c7b" text-anchor="middle">Binding / Work</text>
+  <text x="915" y="395" font-size="15" fill="#526c7b" text-anchor="middle">PropagationPolicy · propagateDeps · ResourceInterpreterCustomization</text>
+
+  <rect x="345" y="445" width="765" height="255" rx="13" fill="#f5f8fb" stroke="#bed0da" stroke-width="2.5"/>
+  <text x="727" y="482" font-size="23" fill="#31546f" font-weight="700" text-anchor="middle">跨控制面集成契约</text>
+  <rect x="365" y="510" width="220" height="145" rx="10" fill="#ffffff" stroke="#aac4d3" stroke-width="2"/>
+  <text x="475" y="548" font-size="20" fill="#27465b" font-weight="700" text-anchor="middle">访问控制</text>
+  <text x="475" y="580" font-size="16" fill="#526c7b" text-anchor="middle">TLS / CA / Token</text>
+  <text x="475" y="608" font-size="16" fill="#526c7b" text-anchor="middle">RBAC / 最小权限</text>
+  <rect x="605" y="510" width="220" height="145" rx="10" fill="#ffffff" stroke="#aac4d3" stroke-width="2"/>
+  <text x="715" y="548" font-size="20" fill="#27465b" font-weight="700" text-anchor="middle">资源传播</text>
+  <text x="715" y="580" font-size="16" fill="#526c7b" text-anchor="middle">PropagationPolicy</text>
+  <text x="715" y="608" font-size="16" fill="#526c7b" text-anchor="middle">Runner Pod / JIT Secret</text>
+  <rect x="845" y="510" width="245" height="145" rx="10" fill="#ffffff" stroke="#aac4d3" stroke-width="2"/>
+  <text x="967" y="548" font-size="20" fill="#27465b" font-weight="700" text-anchor="middle">状态回传</text>
+  <text x="967" y="580" font-size="15" fill="#526c7b" text-anchor="middle">Pod.status / Conditions</text>
+  <text x="967" y="608" font-size="15" fill="#526c7b" text-anchor="middle">AggregateStatus</text>
+
+  <rect x="1170" y="175" width="370" height="250" rx="13" fill="#f8fbfd" stroke="#aac4d3" stroke-width="2.5"/>
+  <text x="1355" y="211" font-size="23" fill="#27465b" font-weight="700" text-anchor="middle">成员集群 A</text>
+  <text x="1355" y="235" font-size="14" fill="#526c7b" text-anchor="middle">Listener 所在成员示例</text>
+  <rect x="1190" y="250" width="330" height="48" rx="8" fill="#ffffff" stroke="#aac4d3" stroke-width="1.8"/>
+  <text x="1355" y="280" font-size="17" fill="#27465b" font-weight="700" text-anchor="middle">Runner Pod + JIT Secret</text>
+  <rect x="1190" y="307" width="330" height="48" rx="8" fill="#ffffff" stroke="#aac4d3" stroke-width="1.8"/>
+  <text x="1355" y="337" font-size="16" fill="#27465b" font-weight="700" text-anchor="middle">Kubernetes API / kube-scheduler</text>
+  <rect x="1190" y="364" width="330" height="43" rx="8" fill="#ffffff" stroke="#aac4d3" stroke-width="1.8"/>
+  <text x="1355" y="391" font-size="15" fill="#526c7b" text-anchor="middle">Workflow NPU Pod（可选）/ Volcano / Device Plugin</text>
+
+  <rect x="1170" y="465" width="370" height="250" rx="13" fill="#f8fbfd" stroke="#aac4d3" stroke-width="2.5"/>
+  <text x="1355" y="501" font-size="23" fill="#27465b" font-weight="700" text-anchor="middle">成员集群 B</text>
+  <rect x="1190" y="525" width="330" height="48" rx="8" fill="#ffffff" stroke="#aac4d3" stroke-width="1.8"/>
+  <text x="1355" y="555" font-size="17" fill="#27465b" font-weight="700" text-anchor="middle">Runner Pod + JIT Secret</text>
+  <rect x="1190" y="582" width="330" height="48" rx="8" fill="#ffffff" stroke="#aac4d3" stroke-width="1.8"/>
+  <text x="1355" y="612" font-size="16" fill="#27465b" font-weight="700" text-anchor="middle">Kubernetes API / kube-scheduler</text>
+  <rect x="1190" y="639" width="330" height="43" rx="8" fill="#ffffff" stroke="#aac4d3" stroke-width="1.8"/>
+  <text x="1355" y="666" font-size="15" fill="#526c7b" text-anchor="middle">Workflow NPU Pod（可选）/ Volcano / Device Plugin</text>
+
+  <path d="M280 405 L365 318" fill="none" stroke="#647d8d" stroke-width="3" marker-end="url(#arr)"/>
+  <text x="310" y="370" font-size="15" fill="#607788" text-anchor="middle">Job / runs-on</text>
+  <path d="M675 318 H740" fill="none" stroke="#647d8d" stroke-width="3" marker-end="url(#arr)"/>
+  <text x="707" y="300" font-size="14" fill="#607788" text-anchor="middle">ARC 资源</text>
+  <path d="M965 318 H1148 V274 H1170" fill="none" stroke="#647d8d" stroke-width="3" marker-end="url(#arr)"/>
+  <path d="M965 338 H1148 V549 H1170" fill="none" stroke="#647d8d" stroke-width="3" marker-end="url(#arr)"/>
+  <text x="1080" y="293" font-size="14" fill="#607788" text-anchor="middle">Binding / Work</text>
+  <path d="M1170 390 H1148 V630 H1090" fill="none" stroke="#91aab7" stroke-width="2.5" stroke-dasharray="8 7" marker-end="url(#dash)"/>
+  <path d="M1170 680 H1155 V655 H1090" fill="none" stroke="#91aab7" stroke-width="2.5" stroke-dasharray="8 7" marker-end="url(#dash)"/>
+  <text x="1128" y="455" font-size="14" fill="#607788" text-anchor="middle">状态回传</text>
+
+  <text x="725" y="727" font-size="16" fill="#526c7b" text-anchor="middle">Karmada 负责成员级放置与对象传播；节点调度和 NPU 设备分配由成员集群负责。</text>
+
+  <rect x="55" y="785" width="330" height="85" rx="12" fill="#f5f8fb" stroke="#bed0da" stroke-width="2"/>
+  <text x="220" y="818" font-size="20" fill="#3e5362" font-weight="700" text-anchor="middle">镜像仓库</text>
+  <text x="220" y="846" font-size="15" fill="#526c7b" text-anchor="middle">ARC Controller / Runner / Action 镜像</text>
+  <rect x="405" y="785" width="350" height="85" rx="12" fill="#f5f8fb" stroke="#bed0da" stroke-width="2"/>
+  <text x="580" y="818" font-size="20" fill="#3e5362" font-weight="700" text-anchor="middle">身份与密钥</text>
+  <text x="580" y="846" font-size="15" fill="#526c7b" text-anchor="middle">GitHub 凭证 / Listener Token / CA</text>
+  <rect x="775" y="785" width="350" height="85" rx="12" fill="#f5f8fb" stroke="#bed0da" stroke-width="2"/>
+  <text x="950" y="818" font-size="20" fill="#3e5362" font-weight="700" text-anchor="middle">GitOps 配置管理</text>
+  <text x="950" y="846" font-size="15" fill="#526c7b" text-anchor="middle">CRD / RunnerScaleSet / Policy / RBAC</text>
+  <rect x="1145" y="785" width="400" height="85" rx="12" fill="#f5f8fb" stroke="#bed0da" stroke-width="2"/>
+  <text x="1345" y="818" font-size="20" fill="#3e5362" font-weight="700" text-anchor="middle">观测与审计</text>
+  <text x="1345" y="846" font-size="15" fill="#526c7b" text-anchor="middle">Metrics / Events / Logs / 非敏感关联 ID</text>
+</g>
+</svg>

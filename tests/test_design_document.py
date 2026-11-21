@@ -141,10 +141,9 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertFalse(relative.startswith("http"))
             self.assertTrue((DOC.parent / relative).is_file(), relative)
 
-    def test_architecture_svgs_show_target_dispatcher_and_member_volcano(self):
+    def test_target_architecture_svgs_show_dispatcher_and_member_volcano(self):
         figures = (
             "federation-subsystem-goal-before-after.svg",
-            "overall-subsystem-architecture.svg",
             "federation-layered-architecture.svg",
             "arc-karmada-deployment-architecture.svg",
         )
@@ -155,6 +154,26 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             self.assertIn("Dispatcher", label_text, filename)
             self.assertIn("Volcano", label_text, filename)
             self.assertNotIn("原型验证", label_text, filename)
+
+        # The repository-level ARC + Karmada integration view excludes Dispatcher.
+        overall = DOC.parent / "images" / "overall-subsystem-architecture.svg"
+        root = ET.parse(overall).getroot()
+        label_text = " ".join((node.text or "") for node in root.iter())
+        self.assertIn("Karmada", label_text)
+        self.assertIn("Volcano", label_text)
+        self.assertNotIn("Dispatcher", label_text)
+
+    def test_system_context_diagram_matches_repository_boundary(self):
+        svg = DOC.parent / "images" / "federation-system-context.svg"
+        root = ET.parse(svg).getroot()
+        label_text = " ".join((node.text or "") for node in root.iter())
+        for element in ("GitHub Actions", "ARC Runner 管理", "Listener",
+                        "Controller", "Karmada 联邦控制", "PropagationPolicy",
+                        "成员集群 A", "成员集群 B", "镜像仓库",
+                        "身份与密钥", "GitOps 配置管理", "观测与审计"):
+            self.assertIn(element, label_text)
+        self.assertNotIn("Dispatcher", label_text)
+        self.assertIn("Volcano", label_text)
 
     def test_every_diagram_has_caption_below_and_next_line_explanation(self):
         lines = self.design.splitlines()
@@ -169,12 +188,12 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
                 mermaid_ends.append(i)
                 inside = False
         self.assertFalse(inside)
-        self.assertEqual(len(image_lines), 5)
+        self.assertEqual(len(image_lines), 6)
         self.assertGreaterEqual(len(mermaid_ends), 18)
         for i in image_lines + mermaid_ends:
             later = [line for line in lines[i + 1:] if line.strip()]
             self.assertTrue(later[0].startswith('<p align="center">图 '), i)
-            self.assertTrue(later[1].startswith("说明："), i)
+            self.assertTrue(later[1].startswith(("说明：", "**职责划分：**")), i)
 
     def test_design_explains_scenario_without_process_commentary(self):
         # Protect the reader-facing design, not an author's review workflow.
