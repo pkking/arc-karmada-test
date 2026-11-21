@@ -82,7 +82,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         overview = self.design.split("## 2.2 核心特性", 1)[1].split("## 2.3 ", 1)[0]
         for feature in ("FT-01", "FT-02", "FT-03", "FT-04", "FT-05"):
             self.assertIn(feature, overview)
-        for concept in ("统一入口与资源共享", "策略约束的成员放置",
+        for concept in ("统一入口与跨成员 Runner 供给", "策略约束的成员放置",
                         "跨控制面执行", "临时资源回收"):
             self.assertIn(concept, overview)
         for implementation_evidence in ("manifests/", "scripts/", ".github/", ".yaml",
