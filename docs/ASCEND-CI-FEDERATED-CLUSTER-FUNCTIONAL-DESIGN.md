@@ -397,6 +397,8 @@ flowchart TB
 
 官方组件分别定义其 API 和控制器行为。本功能域描述 ARC 与 Karmada 的集成，不宣称存在上游联合控制器或跨集群事务。
 
+# 4 功能域规格变更与设计
+
 ## 4.1 功能域规格变更
 
 本次功能域规格以 ARC + Karmada 联邦集成为边界。成员选择使用 Karmada 原生 Scheduler 和 PropagationPolicy；Runner 生命周期使用 ARC 原生控制器。未新增自定义调度控制器、联邦容量账本或成员级 NPU 准入对象。
