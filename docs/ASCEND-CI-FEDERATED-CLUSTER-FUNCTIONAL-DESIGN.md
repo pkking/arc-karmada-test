@@ -1,5 +1,7 @@
 # 昇腾CI 联邦集群功能设计文档
 
+**关键词 / Keywords：** 昇腾 CI（Ascend CI）、多集群 CI（Multi-cluster CI）、集群联邦（Cluster Federation）、联邦调度（Federated Scheduling）、跨集群资源调度（Cross-cluster Resource Scheduling）、Actions Runner Controller（ARC）、Karmada、Runner 生命周期（Runner Lifecycle）、容量感知调度（Capacity-aware Scheduling）、公平调度（Fair Scheduling）、先进先出（FIFO Scheduling）、资源预留（Resource Reservation）、安全回填（Safe Backfill）、多租户资源管理（Multi-tenant Resource Management）、NPU 调度（NPU Scheduling）、异构资源调度（Heterogeneous Resource Scheduling）、状态聚合（Status Aggregation）、凭证传播（Credential Propagation）。
+
 # 1 功能域背景与目的
 
 ## 1.1 目标与职责
