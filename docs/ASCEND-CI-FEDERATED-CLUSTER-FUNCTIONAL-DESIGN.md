@@ -22,7 +22,7 @@
 
 开发者使用统一 Runner 标签提交 Workflow。ARC 根据 GitHub Job 需求创建 Runner；Karmada 根据 PropagationPolicy 选择允许的成员集群并传播 Runner Pod；成员 Kubernetes 启动 Runner 并执行 Workflow。Karmada 将成员 Pod 状态同步到管理面，ARC 按原生生命周期回收 Runner。
 
-资源共享的边界是 Runner 执行实例的跨成员放置。该机制不代表 Karmada 能识别后续 NPU 工作负载的完整设备需求，也不承诺按 NPU 空闲卡数选择成员。
+本功能域的共享边界是 Runner 供给与执行实例的跨成员放置。该机制不代表 Karmada 能识别后续 NPU 工作负载的完整设备需求，也不承诺按 NPU 空闲卡数选择成员。
 
 ## 1.4 整体架构
 
@@ -98,7 +98,7 @@ GitHub 负责 Job 匹配和执行结果；ARC 负责 Runner 生命周期；Karma
 
 | 需求意图 | 核心场景 | SR | 特性与功能 |
 |---|---|---|---|
-| IR-01 跨成员资源共享 | UC-01 统一提交；UC-03 按需供给 | SR-01-01、SR-02-01 | FT-01；F-01、F-02 |
+| IR-01 跨成员 Runner 供给 | UC-01 统一提交；UC-03 按需供给 | SR-01-01、SR-02-01 | FT-01；F-01、F-02 |
 | IR-02 可控成员放置 | UC-05 成员选择；UC-10 无合格成员 | SR-03-01 | FT-02；F-03 |
 | IR-03 跨控制面执行 | UC-06 凭证未就绪；UC-08 访问控制；UC-09 状态反馈 | SR-03-02、SR-04-01、SR-05-01 | FT-03；F-03～F-05 |
 | IR-04 临时资源回收 | UC-04 作业结束；UC-12 状态或清理异常 | SR-02-02 | FT-04；F-02、F-03、F-05 |
