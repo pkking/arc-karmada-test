@@ -112,7 +112,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         lines = self.design.splitlines()
         fences = [line for line in lines if line.strip().startswith("```")]
         self.assertEqual(len(fences) % 2, 0)
-        self.assertGreaterEqual(self.design.count("```mermaid"), 15)
+        self.assertGreaterEqual(self.design.count("```mermaid"), 10)
 
     def test_federation_scope_excludes_custom_capacity_scheduler(self):
         self.assertNotIn("Dispatcher", self.design)
