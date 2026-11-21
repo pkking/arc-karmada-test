@@ -972,7 +972,7 @@ ARC 创建的 Runner Pod 需要在授权的成员 Kubernetes 集群运行。Karm
 
 ### 5.3.4 设计思路
 
-**UC-05 在授权成员放置 Runner——正常时序**
+**UC-05 在授权成员放置 Runner——正常时序（US-03）**
 
 ```mermaid
 sequenceDiagram
@@ -1002,7 +1002,7 @@ sequenceDiagram
 
 **后置条件：** Karmada 为 Runner Pod 建立目标成员放置并传播 Work；成员 Pod 创建后，ARC 根据可观察状态推进 Runner 生命周期。Work 已创建不代表 Runner 已注册。
 
-**UC-06 JIT Secret 晚到——异常时序**
+**UC-06 JIT Secret 晚到——异常时序（US-04）**
 
 ```mermaid
 sequenceDiagram
@@ -1050,6 +1050,8 @@ sequenceDiagram
 
 ### 5.3.6 实现接口设计
 
+#### 5.3.6.1 接口设计
+
 | 交互双方 | API / 资源 | 操作与输入输出 | 权限与约束 | 失败处理 |
 |---|---|---|---|---|
 | 平台配置 → Karmada | PropagationPolicy | 选择 Runner Pod 并定义成员范围 | 仅平台配置身份可修改 | 配置无效时不扩大候选成员 |
@@ -1070,6 +1072,8 @@ sequenceDiagram
 
 ### 5.3.9 DFX分析
 
+**FMEA：**
+
 **关键不变量：** Runner Pod 只在策略允许的成员执行；JIT Secret 只传播到实际需要的成员；成员状态必须保留来源和对象身份；Karmada 放置结果不等于成员 Pod Ready。
 
 | 编号 | 失效模式 | 影响 | 检测方法 | 设计措施 | 验证准则 |
@@ -1086,7 +1090,7 @@ sequenceDiagram
 
 **风险验证：** 对无候选成员、成员失联、Secret 晚到、Work 传播失败、Pod Pending 和删除滞后分别执行设计验证。验证以 Karmada/ARC 锁定版本的 API 行为为准，不把未实现的容量准入、公平队列或故障迁移纳入验收。
 
-# 5.4 F-04 Listener 跨控制面认证与访问
+## 5.4 F-04 Listener 跨控制面认证与访问
 
 **典型场景：** Listener 在成员集群运行，却要修改统一 Karmada 控制面内的 Runner 期望状态。身份或证书配置失效会导致 Runner 无法按 Job 需求扩容。
 
@@ -1358,6 +1362,49 @@ ARC Runner 可以被 Karmada 放置到不同成员集群。成员集群必须提
 
 ### 5.6.4 设计思路
 
+**US-08 成员环境兼容的 Runner 放置**
+
+~~~mermaid
+sequenceDiagram
+    participant A as ARC
+    participant K as Karmada
+    participant S as Karmada Scheduler
+    participant M as Member Kubernetes
+    A->>K: 创建 Runner Pod
+    K->>S: 按 PropagationPolicy 选择成员
+    S-->>K: 返回符合策略的成员
+    K->>M: 传播 Runner Pod
+    M-->>K: 返回 Pod 状态
+    K-->>A: 同步 Runner 状态
+~~~
+
+<p align="center">图 5-6-1 成员环境兼容的 Runner 放置</p>
+
+说明：成员能力标签用于限定候选范围，成员 Kubernetes 负责节点调度。
+
+**US-09 成员环境不兼容**
+
+~~~mermaid
+sequenceDiagram
+    participant P as Platform
+    participant K as Karmada
+    participant M as Member Cluster
+    P->>K: 更新成员标签或传播策略
+    K->>K: 重新评估后续 Runner 的候选范围
+    alt 成员不满足策略
+        K-->>P: 不选择该成员
+    else 成员满足策略
+        K->>M: 按策略传播 Runner Pod
+    end
+    Note over P,M: 已运行 Job 不因成员标签变更自动迁移
+~~~
+
+<p align="center">图 5-6-2 成员环境变化与后续 Runner 放置</p>
+
+说明：成员环境变更影响后续放置，不改变已运行 Job 的目标成员。
+
+### 5.6.4 设计思路
+
 | 场景 | 处理 | 责任边界 |
 |---|---|---|
 | Runner 镜像与成员 CPU 架构兼容 | Karmada 可将 Runner Pod 放置到该成员 | 平台维护成员标签与镜像兼容信息 |
@@ -1372,6 +1419,8 @@ ARC Runner 可以被 Karmada 放置到不同成员集群。成员集群必须提
 
 ### 5.6.6 实现接口设计
 
+#### 5.6.6.1 接口设计
+
 | 交互双方 | 接口/资源 | 输入与输出 | 异常处理 |
 |---|---|---|---|
 | 平台与 Karmada | Cluster labels、PropagationPolicy | 成员能力标签和 Runner Pod 选择范围 | 缺失/过期标签按不满足候选条件处理 |
@@ -1380,6 +1429,8 @@ ARC Runner 可以被 Karmada 放置到不同成员集群。成员集群必须提
 | kubelet 与 Device Plugin | Kubernetes Device Plugin API | 节点设备注册与 Allocate | 插件异常由成员设备运维处理 |
 
 ### 5.6.9 DFX分析
+
+**FMEA：**
 
 **关键不变量：** Karmada 只选择成员集群，不保证成员内 NPU 资源一定满足后续工作负载；设备分配以成员 kubelet/Device Plugin 的实际结果为准；成员环境标签必须可追溯。
 
