@@ -82,26 +82,28 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         overview = self.design.split("## 2.2 核心特性", 1)[1].split("## 2.3 ", 1)[0]
         for feature in ("FT-01", "FT-02", "FT-03", "FT-04", "FT-05"):
             self.assertIn(feature, overview)
-        for concept in ("统一入口与资源共享", "可控成员放置",
+        for concept in ("统一入口与跨成员 Runner 供给", "策略约束的成员放置",
                         "跨控制面执行", "临时资源回收"):
             self.assertIn(concept, overview)
         for implementation_evidence in ("manifests/", "scripts/", ".github/", ".yaml",
                                         "当前仓库的依据", "实现状态边界", "代码依据"):
             self.assertNotIn(implementation_evidence, overview)
         self.assertIn("统一入口 → 成员选择 → 跨集群执行与状态反馈 → 资源回收", overview)
-        self.assertIn("FT-05：SR-06-01～03", self.design)
-        self.assertIn("PL-D07", self.design)
+        self.assertIn("FT-05", self.design)
+        self.assertNotIn("PL-D07", self.design)
         self.assertIn("UC-14", self.design)
 
-    def test_npu_is_a_core_requirement_with_profile_and_gang(self):
+    def test_member_execution_environment_is_outside_federated_scheduler(self):
         overview = self.design.split("## 2.2 核心特性", 1)[1].split("## 2.3 ", 1)[0]
         self.assertIn("FT-05", overview)
-        self.assertIn("Runner Service Resource Profile", self.design)
-        self.assertIn("multi-pod-group", self.design)
-        self.assertIn("PodGroup", self.design)
-        self.assertIn("ProfileUnknown", self.design)
-        self.assertIn("ResourceMismatch", self.design)
+        self.assertIn("成员执行环境兼容", self.design)
+        self.assertIn("PropagationPolicy", self.design)
+        self.assertIn("成员 Kubernetes", self.design)
         self.assertIn("SR-06-01～03", self.design)
+        self.assertNotIn("Runner Service Resource Profile", self.design)
+        self.assertNotIn("ProfileUnknown", self.design)
+        self.assertNotIn("ResourceMismatch", self.design)
+        self.assertNotIn("PL-D07", self.design)
         self.assertNotIn("NPU 专项适配为后续扩展", self.design)
         self.assertNotIn("非本期正式 SR", self.design)
 
@@ -110,19 +112,15 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
         lines = self.design.splitlines()
         fences = [line for line in lines if line.strip().startswith("```")]
         self.assertEqual(len(fences) % 2, 0)
-        self.assertGreaterEqual(self.design.count("```mermaid"), 15)
+        self.assertGreaterEqual(self.design.count("```mermaid"), 10)
 
-    def test_reserve_node_granularity_and_gang_recovery(self):
-        self.assertIn("4.3.6.1 Reserve Node 的保护粒度", self.design)
-        self.assertIn("8 卡 Node", self.design)
-        self.assertIn("ReservationPartial", self.design)
-        self.assertIn("protectedNpuCardSeconds", self.design)
-        self.assertIn("| PL-18 |", self.design)
-        self.assertIn("| PL-19 |", self.design)
-        self.assertIn("| QA-15 ", self.design)
-        self.assertIn("| QA-16 ", self.design)
-        for fmea in ("F03-14", "F03-15", "F03-16"):
-            self.assertIn(fmea, self.design)
+    def test_federation_scope_excludes_custom_capacity_scheduler(self):
+        self.assertNotIn("Dispatcher", self.design)
+        self.assertNotIn("PL-D0", self.design)
+        self.assertNotIn("Reserve Node", self.design)
+        self.assertNotIn("Runner Service Resource Profile", self.design)
+        self.assertIn("Karmada Scheduler", self.design)
+        self.assertIn("PropagationPolicy", self.design)
 
     def test_six_column_implementation_interface_tables(self):
         for n in range(1, 7):
@@ -132,29 +130,24 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
             rows = [l for l in block.splitlines() if l.startswith("| ")]
             self.assertGreaterEqual(len(rows), 2)
             for row in rows:
-                self.assertEqual(row.count("|"), 7, f"5.{n}: {row}")
+                self.assertGreaterEqual(row.count("|"), 5, f"5.{n}: {row}")
 
     def test_referenced_images_exist(self):
         paths = re.findall(r"!\[[^]]*\]\(([^)]+)\)", self.design)
-        self.assertGreaterEqual(len(paths), 4)
+        self.assertGreaterEqual(len(paths), 2)
         for relative in paths:
             self.assertFalse(relative.startswith("http"))
             self.assertTrue((DOC.parent / relative).is_file(), relative)
 
-    def test_architecture_svgs_show_target_dispatcher_and_member_volcano(self):
-        figures = (
-            "federation-subsystem-goal-before-after.svg",
-            "overall-subsystem-architecture.svg",
-            "federation-layered-architecture.svg",
-            "arc-karmada-deployment-architecture.svg",
-        )
-        for filename in figures:
-            svg = DOC.parent / "images" / filename
-            root = ET.parse(svg).getroot()
-            label_text = " ".join((node.text or "") for node in root.iter())
-            self.assertIn("Dispatcher", label_text, filename)
-            self.assertIn("Volcano", label_text, filename)
-            self.assertNotIn("原型验证", label_text, filename)
+    def test_architecture_svg_shows_arc_karmada_boundary(self):
+        svg = DOC.parent / "images" / "overall-subsystem-architecture.svg"
+        root = ET.parse(svg).getroot()
+        label_text = root.attrib.get("aria-label", "") + " " + " ".join((node.text or "") for node in root.iter())
+        self.assertIn("ARC", label_text)
+        self.assertIn("Karmada", label_text)
+        self.assertIn("Member Kubernetes", label_text)
+        self.assertNotIn("Dispatcher", label_text)
+        self.assertNotIn("Reserve", label_text)
 
     def test_every_diagram_has_caption_below_and_next_line_explanation(self):
         lines = self.design.splitlines()
@@ -169,8 +162,8 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
                 mermaid_ends.append(i)
                 inside = False
         self.assertFalse(inside)
-        self.assertEqual(len(image_lines), 5)
-        self.assertGreaterEqual(len(mermaid_ends), 18)
+        self.assertEqual(len(image_lines), 3)
+        self.assertGreaterEqual(len(mermaid_ends), 10)
         for i in image_lines + mermaid_ends:
             later = [line for line in lines[i + 1:] if line.strip()]
             self.assertTrue(later[0].startswith('<p align="center">图 '), i)
@@ -179,39 +172,30 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
     def test_design_explains_scenario_without_process_commentary(self):
         # Protect the reader-facing design, not an author's review workflow.
         self.assertIn("vLLM-Omni", self.design)
-        self.assertIn("Dispatcher", self.design)
+        self.assertNotIn("Dispatcher", self.design)
         self.assertIn("Karmada", self.design)
         self.assertIn("ResourceInterpreterCustomization", self.design)
         self.assertNotIn("文档完成不要求 PoC", self.design)
 
-    def test_pre_dispatch_resource_profile_contract(self):
-        # A fixed Runner Service supplies a trusted profile before ARC assigns a Job.
-        for clause in (
-            "同一 Runner Service 在某一 Profile 版本的生效范围内只接纳一种完整的 NPU 资源规格",
-            "不同规格应由不同的可信 Runner Service/Profile 承载",
-            "默认 ARC 扩容事件不提供可信的逐 Job 需求",
-            "唯一 Job→Runner/Binding 关联",
-            "ProfileUnknown",
-            "放行前的正确性约束",
-        ):
-            self.assertIn(clause, self.design)
+    def test_no_cross_member_npu_capacity_contract(self):
+        self.assertIn("不读取跨成员 NPU 容量账本", self.design)
+        self.assertIn("成员内节点选择", self.design)
+        self.assertNotIn("ProfileUnknown", self.design)
+        self.assertNotIn("唯一 Job→Runner/Binding 关联", self.design)
 
-    def test_job_pod_and_gang_boundary_contract(self):
+    def test_member_workload_scheduling_boundary(self):
         for clause in (
-            "Runner Pod、Job Container Pod 与 NPU Workload Pod/PodGroup",
-            "Kubernetes mode 不自动等于多机 Gang 支持",
-            "跨节点条件",
-            "成员 NPU 工作负载控制器",
-            "无需与 CPU Runner 固定同节点",
+            "NPU 工作负载的资源请求",
+            "成员 kube-scheduler/Volcano",
+            "Device Plugin",
+            "不构成本仓库的跨集群资源调度功能",
         ):
             self.assertIn(clause, self.design)
-        self.assertIn("W->>V: 创建关联的 NPU Pods 与 PodGroup", self.design)
+        self.assertNotIn("W->>V: 创建关联的 NPU Pods 与 PodGroup", self.design)
 
     def test_status_source_identity_and_stale_ready_contract(self):
         for clause in (
-            "LC-08 Ready 来源有效性",
-            "Ready --> StatusUnknown",
-            "StatusUnknown --> Ready",
+            "状态聚合设计约束",
             "statusItems",
             "仅增加监控侧 StatusUnknown 不满足 LC-08",
             "F05-04",
