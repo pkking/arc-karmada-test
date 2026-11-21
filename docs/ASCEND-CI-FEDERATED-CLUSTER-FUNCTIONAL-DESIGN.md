@@ -233,6 +233,8 @@ flowchart LR
 
 <p align="center">图 3-1 ARC 与 Karmada 联邦 Runner 主路径</p>
 
+说明：ARC 创建和管理 Runner；Karmada 选择成员并传播资源；成员 Kubernetes 运行 Pod 并反馈状态。
+
 **处理阶段：**
 
 | 阶段 | 处理 | 责任组件 |
@@ -293,6 +295,8 @@ erDiagram
 ```
 
 <p align="center">图 3-3 ARC 与 Karmada 领域对象关系</p>
+
+说明：图中连线表示业务引用和联邦传播关系，不代表所有权或级联删除关系。
 
 | 对象 | 权威生产者 | 主要关联 | 生命周期与处置 |
 |---|---|---|---|
@@ -368,6 +372,8 @@ flowchart TB
 ```
 
 <p align="center">图 3-4 ARC + Karmada 部署关系</p>
+
+说明：管理面通过 Karmada Agent 管理成员资源；成员集群保持本地 Pod 调度和执行自治。
 
 成员集群数量、地域、设备类型和 Listener 部署位置由环境配置决定。成员之间不要求 Pod 网络互通；控制面通过 Karmada 成员连接管理资源传播。
 
@@ -990,6 +996,8 @@ sequenceDiagram
 
 <p align="center">图 5-3-1 Karmada 选择成员并传播 Runner</p>
 
+说明：Karmada Scheduler 依据传播策略选择成员，Karmada Controller 负责 Work 传播。
+
 **前置条件：** Runner Pod 匹配 PropagationPolicy；候选成员已注册且符合策略约束；ARC、Karmada 和成员 API 连通。
 
 **后置条件：** Karmada 为 Runner Pod 建立目标成员放置并传播 Work；成员 Pod 创建后，ARC 根据可观察状态推进 Runner 生命周期。Work 已创建不代表 Runner 已注册。
@@ -1017,6 +1025,10 @@ sequenceDiagram
     M-->>K: 更新 Pod 状态
     K-->>A: 同步状态
 ```
+
+<p align="center">图 5-3-2 JIT Secret 依赖异步传播</p>
+
+说明：Runner Pod 与 JIT Secret 分别传播；Secret 未就绪时 Runner 不得判为可执行。
 
 **约束：** Pod 和 Secret 传播是异步的。具体晚到后的恢复行为取决于 Pod 启动状态和上游控制器重试机制；不得假设容器会在 Secret 后到后自动恢复运行。
 
