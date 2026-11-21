@@ -641,7 +641,7 @@ Karmada ResourceInterpreterCustomization 必须针对锁定版本验证输入对
 |---|---|---|
 | Runner Pod 无法在成员节点启动 | 成员 Kubernetes | Pod events、节点条件、镜像拉取和挂载状态 |
 | NPU Pod 资源不足 | 成员 kube-scheduler / Volcano | Pod Pending、FailedScheduling、PodGroup 状态 |
-| 设备插件未就绪 | 成员 Device Plugin / kubelet | Node allocatable、插件日志和设备健康状态 |
+| 设备插件未就绪 | 成员 Device Plugin / kubelet | Node allocatable、插件日志和设备健康状态；依据 K8S-3 |
 | 驱动/CANN 不兼容 | 成员镜像与设备运行环境 | 节点镜像、驱动版本和工作负载启动日志 |
 | 多机任务无法成组调度 | 成员 Volcano / 工作负载控制器 | PodGroup、Gang 状态和节点拓扑事件 |
 
@@ -1497,13 +1497,13 @@ sequenceDiagram
 
 | 质量属性 | 设计规格 | 主要章节 |
 |---|---|---|
-| 安全与最小权限 | SP-04、SP-05 | 4.4、5.4 |
-| 凭证保护 | SP-03、SP-04 | 3.5.2、4.4、5.3、5.4 |
-| 成员故障隔离 | SP-02、SP-06、SP-07 | 4.3、4.5、5.3、5.5 |
-| 可服务性与诊断 | SP-09 | 4.7、5.1～5.6 DFX |
-| 性能与容量 | ARC Runner 并发上限、Karmada 控制器和成员 API 容量 | 4.7；业务阈值待确认 |
-| 资源利用 | Karmada 成员选择策略和成员资源池运维 | 4.3、4.7；不承诺跨成员 NPU 利用率优化 |
-| 可维护性 | 上游 API 解耦、版本锁定、声明式策略 | 3.2、4.3、4.7 |
+| SR-NF-01 安全与最小权限 | SP-04、SP-05 | 4.4、5.4 |
+| SR-NF-02 凭证保护 | SP-03、SP-04 | 3.5.2、4.4、5.3、5.4 |
+| SR-NF-03 成员故障隔离 | SP-02、SP-06、SP-07 | 4.3、4.5、5.3、5.5 |
+| SR-NF-04 可服务性与诊断 | SP-09 | 4.7、5.1～5.6 DFX |
+| SR-NF-05 性能与容量 | ARC Runner 并发上限、Karmada 控制器和成员 API 容量 | 4.7；业务阈值待确认 |
+| SR-NF-06 资源利用 | Karmada 成员选择策略和成员资源池运维 | 4.3、4.7；不承诺跨成员 NPU 利用率优化 |
+| SR-NF-08 可维护性 | 上游 API 解耦、版本锁定、声明式策略 | 3.2、4.3、4.7 |
 
 ### 5.8.3 范围外能力与待确认项
 
@@ -1517,7 +1517,7 @@ sequenceDiagram
 | 业务性能目标 | CI 产品与运维 | 提供计量口径，具体阈值由业务批准 |
 
 
-### 5.8.3 待确认的能力与配置
+### 5.8.4 待确认的能力与配置
 
 | 项目 | 待确认内容 |
 |---|---|
