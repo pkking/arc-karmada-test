@@ -1360,8 +1360,6 @@ ARC Runner 可以被 Karmada 放置到不同成员集群。成员集群必须提
 
 通过成员集群标签和 PropagationPolicy 限定 Runner Pod 的允许放置范围。平台维护成员环境的基础信息，包括 Kubernetes 版本、CPU 架构、容器运行时、网络、存储和 Runner 镜像兼容性。NPU 型号、驱动、CANN、Volcano、Device Plugin 和工作负载拓扑属于成员资源池的运行条件，不由 ARC/Karmada 联邦层推导。
 
-### 5.6.4 设计思路
-
 **US-08 成员环境兼容的 Runner 放置**
 
 ~~~mermaid
