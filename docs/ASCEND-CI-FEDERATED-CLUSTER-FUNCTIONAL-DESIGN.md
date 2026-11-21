@@ -46,23 +46,22 @@
 
 ## 1.4 整体架构
 
-![ARC + Karmada 联邦调度执行子系统整体架构](images/overall-subsystem-architecture.svg)
+![ARC + Karmada 联邦集群整体架构](images/overall-subsystem-architecture.svg)
 
-<p align="center">图 1-2 联邦 Runner 执行子系统整体架构</p>
+<p align="center">图 1-2 ARC 与 Karmada 联邦集群整体架构</p>
 
-说明：Dispatcher 选择成员、Karmada 分发、成员 Volcano 为实际 NPU Pod 选择节点。
+**职责划分：** ARC 管理 GitHub Job 对应的 Runner 需求与生命周期；Karmada 管理成员集群、选择目标成员、传播 Runner 资源及其依赖，并协调成员对象状态；成员 Kubernetes 调度 Runner Pod，Volcano（如部署）负责 Gang 等成员内调度，kubelet/Device Plugin 完成节点执行与设备分配。
 
-目标系统包含 ARC、Dispatcher、Karmada、成员 Volcano/kube-scheduler 与实际 NPU Pod/PodGroup；外部接口如下。**Dispatcher 选成员，Karmada 分发，成员选择 NPU Node**。
+**核心链路：** GitHub Actions 将任务需求交给 ARC；ARC 创建和管理 Runner 资源；Karmada Scheduler 根据传播策略选择成员集群，Karmada 将 Runner Pod 及必要依赖传播到目标成员；成员 Kubernetes 执行 Runner，并将对象状态反馈至 Karmada，ARC 据此推进 Runner 生命周期。JIT Secret 等敏感依赖按目标成员范围传播。
+
+**边界：** 本功能域提供 ARC 与 Karmada 的联邦集成，不包含独立 Dispatcher、跨成员 FIFO/Reserve/Backfill 或自定义容量准入。成员选择由 Karmada 原生调度机制及传播策略承担；NPU 设备分配仍由成员 Kubernetes 及设备插件负责。
 
 | 外部子系统 | 方向 | 交互内容 |
 |---|---|---|
-| GitHub Actions | 输入 | 工作流任务、`runs-on` 标签、Runner 需求 |
-| GitHub Actions | 输出 | Runner 注册、Job 执行状态和结果 |
-| 配置与部署系统 | 输入 | Scale Set、PropagationPolicy、RBAC、组件版本 |
-| 镜像仓库 | 输入 | Runner 镜像、Action 镜像 |
-| 监控与审计系统 | 输出 | 运行日志、Kubernetes 事件、验证记录 |
-
-**范围：** 一套 ARC、一套 Karmada、两个成员仅为示例；不限定地域或 Kind。NPU 插件按设备选型提供，不依赖 `karmada-search`。
+| GitHub Actions | 双向 | Job 需求、Runner 注册、执行状态和结果 |
+| 配置与身份系统 | 输入 | RunnerScaleSet、PropagationPolicy、RBAC、TLS 与依赖传播配置 |
+| 镜像仓库 | 输入 | Runner 镜像及 Workflow 所需镜像 |
+| 监控与审计系统 | 输出 | ARC/Karmada/成员集群状态、事件与诊断数据 |
 
 ## 1.5 关键约束
 
