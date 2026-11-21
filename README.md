@@ -2,6 +2,8 @@
 
 本项目是基于 **Actions Runner Controller (ARC)** 与 **Karmada 原生多集群联邦** 的多集群 CI/CD 算力底座验证项目（Proof of Concept, PoC），不是生产就绪保证。
 
+**关键词 / Keywords：** 昇腾 CI（Ascend CI）、多集群 CI（Multi-cluster CI）、集群联邦（Cluster Federation）、联邦调度（Federated Scheduling）、跨集群资源调度（Cross-cluster Resource Scheduling）、Actions Runner Controller（ARC）、Karmada、Runner 生命周期（Runner Lifecycle）、容量感知调度（Capacity-aware Scheduling）、公平调度（Fair Scheduling）、先进先出（FIFO Scheduling）、资源预留（Resource Reservation）、安全回填（Safe Backfill）、多租户资源管理（Multi-tenant Resource Management）、NPU 调度（NPU Scheduling）、异构资源调度（Heterogeneous Resource Scheduling）、状态聚合（Status Aggregation）、凭证传播（Credential Propagation）。
+
 **当前版本：官方 ARC `0.15.0`，不再使用源码补丁或自编译控制器。** 2026-10-15 已在 Karmada `v1.19.0` / Kubernetes `v1.37.0` 的两个 Kind 成员集群上重新验证。实测证据与限制见 [`docs/arc-0.15.0-validation.md`](docs/arc-0.15.0-validation.md)。
 
 本指南提供了完整的配置说明与端到端复现步骤，指导架构师与运维专家从零搭建并验证该架构。
