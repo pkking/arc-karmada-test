@@ -30,6 +30,8 @@
 
 <p align="center">图 1-2 ARC 与 Karmada 联邦集群整体架构</p>
 
+说明：ARC 管理 Runner 生命周期；Karmada 负责成员选择和资源传播；成员 Kubernetes 负责 Pod 执行。
+
 **职责划分：** ARC 管理 GitHub Job 对应的 Runner 需求与生命周期；Karmada 管理成员集群、选择目标成员、传播 Runner 资源及其依赖，并协调成员对象状态；成员 Kubernetes 调度 Runner Pod，Volcano（如部署）负责 Gang 等成员内调度，kubelet/Device Plugin 完成节点执行与设备分配。
 
 **核心链路：** GitHub Actions 将任务需求交给 ARC；ARC 创建和管理 Runner 资源；Karmada Scheduler 根据传播策略选择成员集群，Karmada 将 Runner Pod 及必要依赖传播到目标成员；成员 Kubernetes 执行 Runner，并将对象状态反馈至 Karmada，ARC 据此推进 Runner 生命周期。JIT Secret 等敏感依赖按目标成员范围传播。
@@ -255,6 +257,8 @@ flowchart LR
 ![ARC + Karmada 联邦集群整体架构](images/overall-subsystem-architecture.svg)
 
 <p align="center">图 3-2 ARC 与 Karmada 联邦集群逻辑架构</p>
+
+说明：图中只展示本功能域涉及的系统元素及其协作关系。
 
 | 架构构件 | 职责 | 输入与输出 |
 |---|---|---|
