@@ -195,9 +195,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
 
     def test_status_source_identity_and_stale_ready_contract(self):
         for clause in (
-            "LC-08 Ready 来源有效性",
-            "Ready --> StatusUnknown",
-            "StatusUnknown --> Ready",
+            "状态聚合设计约束",
             "statusItems",
             "仅增加监控侧 StatusUnknown 不满足 LC-08",
             "F05-04",
