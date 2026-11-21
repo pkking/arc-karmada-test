@@ -142,7 +142,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
     def test_architecture_svg_shows_arc_karmada_boundary(self):
         svg = DOC.parent / "images" / "overall-subsystem-architecture.svg"
         root = ET.parse(svg).getroot()
-        label_text = " ".join((node.text or "") for node in root.iter())
+        label_text = root.attrib.get("aria-label", "") + " " + " ".join((node.text or "") for node in root.iter())
         self.assertIn("ARC", label_text)
         self.assertIn("Karmada", label_text)
         self.assertIn("Member Kubernetes", label_text)
