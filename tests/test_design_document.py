@@ -162,7 +162,7 @@ class CanonicalDesignDocumentTests(unittest.TestCase):
                 mermaid_ends.append(i)
                 inside = False
         self.assertFalse(inside)
-        self.assertEqual(len(image_lines), 2)
+        self.assertEqual(len(image_lines), 3)
         self.assertGreaterEqual(len(mermaid_ends), 10)
         for i in image_lines + mermaid_ends:
             later = [line for line in lines[i + 1:] if line.strip()]
