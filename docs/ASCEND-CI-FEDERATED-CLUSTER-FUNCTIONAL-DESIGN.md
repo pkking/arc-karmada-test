@@ -6,7 +6,7 @@
 
 **业务场景。** vLLM 社区在 PR 高峰期每天可能提交超过 50 个 PR，单个 PR 的 CI 验证平均需要约 36 张 NPU 卡。项目集群按用途独立部署时，某个集群的 Runner 需求可能暂时超过本地供给，而其他集群仍有可用执行资源。开发者不应通过修改 Workflow 或手动选择集群来适配平台内部部署变化。
 
-**设计目标。** 使用 ARC 统一管理 Runner 生命周期，使用 Karmada 将 Runner Pod 纳入多成员 Kubernetes 集群管理。开发者继续使用平台提供的 Runner 标签；Karmada 根据平台配置的传播策略选择目标成员，并将 Runner Pod 及必要依赖传播到该成员。成员 Kubernetes 执行 Runner，状态经 Karmada 返回管理面。
+**设计目标。** 使用 ARC 统一管理 Runner 生命周期，使用 Karmada 将 Runner Pod 纳入多成员 Kubernetes 集群管理。开发者继续使用平台提供的 Runner 标签；Karmada 根据平台配置的传播策略选择目标成员，并将 Runner Pod 及必要依赖传播到该成员。成员 Kubernetes 执行 Runner，状态经 Karmada 返回管理面。本仓库解决 Runner 管理与执行实例的跨集群放置，不负责后续 NPU 工作负载的跨集群资源分配。
 
 **职责：** ARC 负责 Runner 需求、创建、注册与回收；Karmada 负责成员管理、Runner Pod 成员选择、资源传播和状态协调；成员 Kubernetes 负责 Pod 运行与节点调度。GitHub Actions 保持 Job 匹配和结果管理权。
 
@@ -64,9 +64,9 @@ GitHub 负责 Job 匹配和执行结果；ARC 负责 Runner 生命周期；Karma
 
 ## 2.2 核心特性
 
-核心能力是让开发者使用统一 Runner 服务，并将合格的空闲资源从按项目隔离的集群中释放出来供授权任务使用。
+核心能力是让开发者使用统一 Runner 服务，并将 Runner 执行实例部署到多个授权成员集群，解除 Runner 管理与单一执行集群的绑定。
 
-**FT-01 统一入口与资源共享。** vLLM 开发者保留原有工作流标签；Runner 可在授权的 vLLM-Omni 等成员集群运行，开发者无须选择集群。
+**FT-01 统一入口与跨成员 Runner 供给。** vLLM 开发者保留原有工作流标签；Runner 可在授权的 vLLM-Omni 等成员集群运行，开发者无须选择集群。
 
 **FT-02 策略约束的成员放置。** 平台通过 PropagationPolicy 定义 Runner Pod 的候选成员范围，由 Karmada Scheduler 根据策略和成员状态选择目标成员。该能力仅提供策略约束下的成员选择，不提供跨成员公平队列或 NPU 容量预留。
 
@@ -160,7 +160,7 @@ SR-01-02 属 GitHub 原生匹配异常，不列为核心 SR。SR-06-01～03 描�
 
 | 特性 | 功能 SR | 非功能 SR | 设计单元 |
 |---|---|---|---|
-| FT-01 统一入口与共享 | SR-01-01、SR-02-01 | SR-NF-05、SR-NF-06 | F-01～F-03 |
+| FT-01 统一入口与跨成员 Runner 供给 | SR-01-01、SR-02-01 | SR-NF-05、SR-NF-06 | F-01～F-03 |
 | FT-02 可控成员放置 | SR-03-01 | SR-NF-03、SR-NF-08 | F-03 |
 | FT-03 跨控制面执行 | SR-03-02、SR-04-01、SR-05-01 | SR-NF-01、SR-NF-02、SR-NF-04 | F-03～F-05 |
 | FT-04 临时资源回收 | SR-02-02 | SR-NF-04、SR-NF-06 | F-02、F-03、F-05 |
@@ -173,7 +173,7 @@ SR-01-02 属 GitHub 原生匹配异常，不列为核心 SR。SR-06-01～03 描�
 - 不重建 GitHub Job 匹配、队列排序和结果存储；UC-02 仍保留异常说明。
 - 不涉及 Runner 沙箱、虚拟机、工作负载强隔离或云平台安全选型；必要的联邦 API 鉴权、凭证传播与放置权限仍属集成契约。
 - ARC/Karmada 内部实现见第 4、5 章，不另列核心 SR。
-- 本方案不开发 NPU Device Plugin、硬件驱动或跨成员多 Pod Gang；NPU 资源规格、成员容量准入与成员内调度接口属于 F-06 正式范围。
+- 本方案不开发 NPU Device Plugin、硬件驱动、跨成员 NPU 容量准入或跨成员多 Pod Gang；NPU 工作负载的资源请求、设备型号、拓扑和成员内调度由成员集群负责。
 - 不承诺运行中 Job 无损迁移或独立 Runner 逐轮均衡分配。
 - 企业级可用性、通用升级、成本预算和监控产品选型不另列核心 SR。
 
