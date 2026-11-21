@@ -14,7 +14,7 @@
 
 **包含：** ARC 与 Karmada 的联邦集成，包括统一 Runner 入口、成员范围配置、Runner Pod 传播、JIT Secret 依赖传播、Listener 跨控制面认证、成员 Pod 状态反馈和临时资源回收。
 
-**不包含：** 自定义跨成员调度器、跨成员容量账本、跨租户公平队列、FIFO/Reserve Node/Backfill、跨成员 NPU 容量准入、NPU 拓扑选择、跨成员 Gang 调度、GitHub Job 队列管理和运行中 Job 无损迁移。
+**不包含：** 自定义跨成员容量仲裁、公平队列、资源预留、NPU 拓扑选择、跨成员 Gang 调度、GitHub Job 队列管理和运行中 Job 无损迁移。
 
 **成员职责：** NPU 工作负载的资源请求、设备插件、驱动/CANN、Volcano/Gang 和节点拓扑由成员集群负责。本仓库只定义 Runner 联邦放置所需的集成约束，不替代成员调度栈。
 
@@ -438,7 +438,7 @@ flowchart TB
 
 Runner Pod 由 ARC 创建并交由 Karmada 管理。Karmada Scheduler 根据 PropagationPolicy 中的资源选择器、成员范围和调度约束选择目标成员；Karmada Controller 创建 Work 并传播 Runner Pod。JIT Secret 等依赖通过 Karmada 依赖传播机制到达目标成员。
 
-本规格只定义 ARC 与 Karmada 的联邦集成。成员选择使用 Karmada 原生调度机制，不增加独立调度器、队列、容量账本、预留节点或自定义回填算法。
+本规格只定义 ARC 与 Karmada 的联邦集成。成员选择使用 Karmada 原生调度机制，不增加独立调度控制器或自定义容量仲裁逻辑。
 
 ### 4.3.2 实现设计
 
@@ -446,7 +446,7 @@ Runner Pod 由 ARC 创建并交由 Karmada 管理。Karmada Scheduler 根据 Pro
 |---|---|---|
 | 资源匹配 | PropagationPolicy ResourceSelector 匹配 ARC 创建的 Runner Pod | selector 范围必须精确；不得意外匹配其他工作负载 |
 | 成员范围 | ClusterAffinity / ClusterAffinityLabelSelector 限定授权成员 | 候选成员为空时资源保持未放置并产生可诊断状态 |
-| 成员选择 | Karmada Scheduler 根据策略和可获得的成员状态选择目标成员 | 不宣称 NPU 拓扑感知、跨成员容量预留或 FIFO 公平 |
+| 成员选择 | Karmada Scheduler 根据策略和可获得的成员状态选择目标成员 | 不宣称 NPU 拓扑感知、跨成员容量预留或租户公平 |
 | 资源传播 | Karmada Binding/Work 将 Runner Pod 传播至目标成员 | Work 创建不等于成员 Pod 已 Ready |
 | 依赖传播 | propagateDeps 传播 Runner Pod 引用的 JIT Secret 等依赖 | 依赖可能异步到达；成员 Pod 在必需 Secret 可用前不能成功启动 |
 | 状态回传 | Karmada 获取成员 Pod 状态并通过解释配置同步 | 保留必要的 conditions/containerStatuses；状态来源与目标 Pod 身份必须可关联 |
@@ -460,7 +460,7 @@ Karmada 的成员选择基于其支持的调度字段、成员状态和传播策
 
 | 条件 | 本功能域行为 | 不提供的保证 |
 |---|---|---|
-| 成员满足策略约束且可调度 | Karmada Scheduler 按目标版本机制选择成员 | 不保证按业务租户公平或严格 FIFO |
+| 成员满足策略约束且可调度 | Karmada Scheduler 按目标版本机制选择成员 | 不保证按业务租户公平或任务等待顺序 |
 | 候选成员不满足策略约束 | 资源保持未放置，记录 Karmada 调度状态 | 不自动扩大成员授权范围 |
 | 成员资源不足 | 成员调度器报告 Pod Pending / FailedScheduling 等状态 | 不跨成员拼接资源，不自动迁移运行中 Job |
 | NPU Pod 无法在成员内调度 | 由成员调度栈处理节点、扩展资源和 Gang 条件 | 不由 ARC/Karmada 联邦层代替 Volcano 或 kube-scheduler |
@@ -627,7 +627,7 @@ Karmada ResourceInterpreterCustomization 必须针对锁定版本验证输入对
 - NPU 工作负载的资源请求、设备型号、驱动/CANN 版本、节点拓扑和 Gang 约束由工作负载及成员资源池配置定义。
 - 成员 kube-scheduler/Volcano 根据真实 Pod/PodGroup 请求进行节点调度；Device Plugin 向 kubelet 提供设备分配能力。
 - Karmada 的成员选择不读取或仲裁跨成员 NPU 容量；Runner Pod 被放置到成员集群也不表示该成员一定有足够 NPU 资源运行后续工作负载。
-- 本仓库不定义 Runner Service Resource Profile、跨成员 NPU 容量账本、NPU 预留或成员级 NPU 准入 API。
+- 本仓库不定义跨成员 NPU 容量账本、资源预留或成员级 NPU 准入 API。
 
 ### 4.6.3 运行约束与诊断
 
@@ -1503,7 +1503,7 @@ sequenceDiagram
 
 | 能力 | 归属 | 本功能域处理 |
 |---|---|---|
-| 跨成员 FIFO、公平队列、Reserve Node、Backfill | 独立联邦调度产品 | 不实现、不依赖 |
+| 跨成员公平队列与资源预留 | 独立联邦调度产品 | 不实现、不依赖 |
 | 跨成员 NPU 容量账本与准入 | CI 资源调度平台 | 不实现；成员内调度结果由成员 Kubernetes/Volcano 提供 |
 | NPU 拓扑与 Gang 调度 | 成员集群调度栈 | 本仓库只验证 Runner 联邦放置不破坏成员自治 |
 | Job exactly-once 与运行中无损迁移 | GitHub/Runner 执行语义及更高层平台 | 不作保证 |
