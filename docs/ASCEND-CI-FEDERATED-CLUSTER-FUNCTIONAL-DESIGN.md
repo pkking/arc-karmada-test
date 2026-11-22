@@ -1395,7 +1395,7 @@ kubectl --kubeconfig="$KUBECONFIG_KARMADA" get crd | grep actions.github.com
 
 **3. 在管理集群部署 Controller Runtime**
 
-Controller Pod 由管理集群 Kubernetes API 创建。容器使用官方 ARC 镜像，启动参数显式指定 Karmada kubeconfig，例如：
+Controller Pod 由管理集群 Kubernetes API 创建。容器使用官方 ARC 镜像，启动参数显式指定 Karmada kubeconfig。以下仅列出 Deployment 关键字段；实际清单还需补齐 apiVersion、kind、selector、探针、资源请求、调度约束和 Secret 挂载配置：
 
 ~~~yaml
 metadata:
@@ -1431,7 +1431,9 @@ spec:
 
 Karmada kubeconfig 使用独立的 Controller 身份。优先采用 Karmada API 明确接受的短期 Token 或受控客户端证书；Token 的 issuer、audience、有效期和轮换方式必须与 Karmada API 认证配置匹配。若使用 tokenFile 或 Secret 投射卷，必须验证 ARC/client-go 是否重新读取新凭证；不能证明热加载时，按受控滚动重启完成轮换。凭证文件只读挂载，不写入日志、镜像或命令行参数。
 
-**Chart 部署注意：** ARC 0.15.0 官方 Helm Chart 的 CRD、RBAC 和 Controller Deployment 都由当前 Helm Kubernetes Context 决定安装位置；其默认 Deployment 模板不会自动将 Controller 指向另一个 Karmada API。双 API 部署必须拆分 CRD/RBAC 与 Controller Runtime：CRD/RBAC 明确应用到 Karmada API，Controller Deployment 部署到管理集群，并通过受控 Deployment/Chart Overlay 注入 --kubeconfig。不能对管理集群执行一次普通 Helm 安装后，假定 ARC CRD 和 RBAC 已经进入 Karmada API。当前 PoC 的 scripts/run-arc-manager.sh 已使用官方 0.15.0 镜像和 --kubeconfig 连接 Karmada；生产 Deployment 应复用该连接契约并补齐运行时健康检查。
+Controller 单副本运行时不需要 Leader Election。若部署多个副本，必须启用 ARC Leader Election，并设置稳定的 leader-election-id；Lease 和对应 RBAC 必须位于 Karmada API 的 Controller Namespace。多副本只提供故障切换，不表示多个 Controller 同时调谐同一组 ARC 对象。
+
+**Chart 部署注意：** ARC 0.15.0 官方 Helm Chart 的 CRD、RBAC 和 Controller Deployment 都由当前 Helm Kubernetes Context 决定安装位置；其 [Deployment 模板](https://github.com/actions/actions-runner-controller/blob/1945b42820760eb50893c8da77fdfc42cf8dad45/charts/gha-runner-scale-set-controller/templates/deployment.yaml) 不会自动将 Controller 指向另一个 Karmada API，[默认 values](https://github.com/actions/actions-runner-controller/blob/1945b42820760eb50893c8da77fdfc42cf8dad45/charts/gha-runner-scale-set-controller/values.yaml) 也没有提供 kubeconfig 参数。双 API 部署必须拆分 CRD/RBAC 与 Controller Runtime：CRD/RBAC 明确应用到 Karmada API，Controller Deployment 部署到管理集群，并通过受控 Deployment/Chart Overlay 注入 --kubeconfig。不能对管理集群执行一次普通 Helm 安装后，假定 ARC CRD 和 RBAC 已经进入 Karmada API。当前 PoC 的 [run-arc-manager.sh](../scripts/run-arc-manager.sh) 已使用官方 0.15.0 镜像和 --kubeconfig 连接 Karmada；生产 Deployment 应复用该连接契约并补齐运行时健康检查。Controller RBAC 以官方 [ClusterRole](https://github.com/actions/actions-runner-controller/blob/1945b42820760eb50893c8da77fdfc42cf8dad45/charts/gha-runner-scale-set-controller/templates/manager_cluster_role.yaml)、[Listener Role](https://github.com/actions/actions-runner-controller/blob/1945b42820760eb50893c8da77fdfc42cf8dad45/charts/gha-runner-scale-set-controller/templates/manager_listener_role.yaml) 和 [Leader Election Role](https://github.com/actions/actions-runner-controller/blob/1945b42820760eb50893c8da77fdfc42cf8dad45/charts/gha-runner-scale-set-controller/templates/leader_election_role.yaml) 为基线，逐项审核后安装到 Karmada API。
 
 **4. Listener 与 Runner 传播策略**
 
