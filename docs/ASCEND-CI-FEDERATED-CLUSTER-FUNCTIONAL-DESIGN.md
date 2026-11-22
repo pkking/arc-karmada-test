@@ -1398,11 +1398,33 @@ kubectl --kubeconfig="$KUBECONFIG_KARMADA" get crd | grep actions.github.com
 Controller Pod 由管理集群 Kubernetes API 创建。容器使用官方 ARC 镜像，启动参数显式指定 Karmada kubeconfig，例如：
 
 ~~~yaml
-image: ghcr.io/actions/gha-runner-scale-set-controller:0.15.0
-command: ["/manager"]
-args:
-  - --auto-scaling-runner-set-only
-  - --kubeconfig=/etc/arc/kubeconfig
+metadata:
+  namespace: arc-controller-system  # 管理集群 Namespace
+spec:
+  template:
+    spec:
+      serviceAccountName: arc-controller-runtime
+      automountServiceAccountToken: false
+      containers:
+      - name: manager
+        image: ghcr.io/actions/gha-runner-scale-set-controller:0.15.0
+        command: ["/manager"]
+        args:
+        - --auto-scaling-runner-set-only
+        - --kubeconfig=/etc/arc/kubeconfig
+        env:
+        - name: CONTROLLER_MANAGER_POD_NAMESPACE
+          value: arc-systems  # Karmada API 中的 ARC Listener Namespace
+        - name: CONTROLLER_MANAGER_CONTAINER_IMAGE
+          value: ghcr.io/actions/gha-runner-scale-set-controller:0.15.0
+        volumeMounts:
+        - name: karmada-kubeconfig
+          mountPath: /etc/arc
+          readOnly: true
+      volumes:
+      - name: karmada-kubeconfig
+        secret:
+          secretName: arc-controller-karmada-kubeconfig
 ~~~
 
 将专用 Karmada kubeconfig 以只读文件挂载到 /etc/arc/kubeconfig。Kubeconfig 的 server 指向稳定的 Karmada API HTTPS 域名或内部负载均衡地址；certificate-authority-data/CA 文件验证证书链，访问域名必须匹配服务端 SAN。Controller 不得通过宿主集群默认 InClusterConfig 访问宿主 API，也不得通过固定 IP、关闭 TLS 校验或 hostAliases 规避证书问题。
@@ -1417,7 +1439,7 @@ Karmada kubeconfig 使用独立的 Controller 身份。优先采用 Karmada API 
 - Runner Pod：单独使用 Runner Pod PropagationPolicy，候选成员由平台授权列表确定。Selector 必须匹配 ARC Runner Pod，不得仅按 arc-runners Namespace 选择全部 Pod。
 - JIT Secret：对 Runner Pod 开启 propagateDeps: true，由 Karmada 按 Pod 的目标成员传播依赖。依赖传播是异步过程，不构成 Pod 与 Secret 的原子事务；Secret 未就绪时，Runner Pod 保持未就绪并等待依赖。
 - Runner ServiceAccount：传播到 Runner 候选成员，供 Pod admission 使用。该 ServiceAccount 不授予 Kubernetes API 权限，并在 Runner Pod 中关闭 Token 自动挂载。
-- GitHub 长期管理凭证：Controller 从 Karmada API 读取；若 Listener 需要该 Secret，只传播到 Listener 所在成员。普通 Runner Pod 不得引用或读取该凭证。
+- GitHub 长期管理凭证：Controller 从 Karmada API 读取；若 Listener 需要该 Secret，只传播到 Listener 所在成员。普通 Runner Pod 不得引用或读取该凭证。当前 manifests/02-propagation-policies.yaml 将 arc-github-secret 传播到 member1 和 member2；这是 PoC 现状，与目标约束不一致。生产配置必须收窄到 Listener 实际所在成员，并验证其他 Runner 成员不存在该 Secret。
 
 **5. Listener 与 Controller 的职责边界**
 
