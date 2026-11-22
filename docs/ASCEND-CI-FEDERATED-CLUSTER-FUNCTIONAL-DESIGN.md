@@ -415,10 +415,10 @@ erDiagram
 
 ### 3.6.1 安装与声明依赖次序
 
-1. 提供 Karmada API、可达的成员 K8s API 和所需 ARC 版本 CRD；目标成员达到可参与传播的状态。
-2. 准备命名空间、控制面身份/证书、Runner SA 与 GitHub 管理凭证。
-3. 安装状态解释器、角色/绑定和传播策略，再声明 AutoscalingRunnerSet；保证 Listener 访问的是正确控制面。
-4. 安装官方 ARC Controller 并由其调谐动态对象。组件顺序、重试和升级回滚在部署计划中实现，不在功能设计中复刻具体 Shell 命令。
+1. 提供 Karmada API 和可达的成员 Kubernetes API；将与 Controller 版本一致的四类 ARC CRD 安装到 Karmada API。
+2. 在 Karmada API 创建 ARC Namespace，安装 Controller/Listener RBAC、状态解释器和传播策略；准备独立身份、CA、Token 与 GitHub 管理凭证。
+3. 在管理集群部署共享 ARC Controller，显式配置 Karmada kubeconfig；在 Karmada API 声明 AutoscalingRunnerSet。
+4. ARC 创建 Listener 和临时 Runner 对象；Karmada 按策略将 Listener/Runner Pod 及各自依赖传播到目标成员。成员只部署执行工作负载，不部署 ARC Controller。
 
 ## 3.7 官方依据与边界
 
@@ -1464,16 +1464,6 @@ sequenceDiagram
 
 **可靠性边界：** Karmada API 中断期间，新的 Runner 供给、Listener 需求更新和临时对象回收可能暂停；已经启动且仍能访问 GitHub 的 Runner 可继续执行。平台不得通过成员侧临时启动另一套 ARC Controller 绕过故障。API 恢复后按 ARC/Karmada 当前对象状态对账，不假定跨 GitHub、ARC 和 Karmada 的事务原子性。
 
-#### DFX 故障模式（FMEA）
-
-| 编号 | 失效原因 | 业务或系统影响 | 检测方法 | 处理与恢复要求 | 负责方 |
-|---|---|---|---|---|---|
-| F02-04 | Controller kubeconfig 指向宿主 API、地址不可达或 TLS/身份校验失败 | Controller 无法 watch/调谐 ARC 对象，Runner 供给与回收停止 | Controller 日志、Ready 状态、API 探测；区分 DNS/TCP、TLS、401 | 修正 Karmada endpoint、CA/SAN 或凭证；恢复后由 Controller 对账；不得切换到成员 API | ARC/网络/身份维护者 |
-| F02-05 | ARC CRD 或 Controller RBAC 安装到错误 API，或版本不一致 | Karmada API 无法识别 ARC 类型，或 Controller 收到 403 | 对 Karmada API 检查四类 CRD、Schema 版本和 auth can-i | 按同一 ARC release 修复 Karmada API 上的 CRD/RBAC；不得在每个成员补装 CRD | ARC 部署维护者 |
-| F02-06 | 多个 Controller 同时调谐且未启用 Leader Election | 重复调谐、资源竞争、状态抖动 | 检查 Controller 副本、Leader Lease 和重复调谐日志 | 启用 ARC Leader Election；确认 Karmada API 中 Lease RBAC 正确；每个联邦只保留一个活动 Leader | ARC 运维 |
-| F02-07 | PropagationPolicy 选择器过宽或凭证传播范围过大 | 非 Runner Pod 被下发，长期 GitHub 凭证暴露到无关成员 | 检查 Work、成员 Pod/Secret 清单和策略 Selector | 收紧到 ARC Runner 标签；撤销/轮换已暴露凭证；长期凭证只发给实际消费者 | 联邦策略/安全管理员 |
-| F02-08 | Karmada API 暂时不可用或控制器重启 | 新任务扩容、Listener 更新和清理延迟 | API 健康检查、请求错误率、调谐积压和对象年龄 | 恢复 Karmada API 后继续调谐并核对 UID；不在成员侧启动第二套 ARC Controller | Karmada/ARC 运维 |
-
 **设计验证准则：**
 1. 管理集群存在 Controller Deployment；Karmada API 存在四类 ARC CRD；成员集群不存在 ARC CRD 和 ARC Controller Deployment。
 2. AutoscalingRunnerSet、AutoscalingListener、EphemeralRunnerSet、EphemeralRunner 只存在于 Karmada API；成员只存在被传播的 Listener/Runner Pod 和所需依赖。
@@ -1623,7 +1613,7 @@ sequenceDiagram
 
 ### 5.2.9 DFX分析
 
-**功能安全与性能约束**：平台不能超过 Runner 服务规定的容量上限。作业失败后，未经确认的重复执行可能产生副作用，因此不得仅因 Runner Pod 消失而重新提交作业。JIT Secret 的数据不得写入日志。
+**功能安全与性能约束**：平台不能超过 Runner 服务规定的容量上限。作业失败后，未经确认的重复执行可能产生副作用，因此不得仅因 Runner Pod 消失而重新提交作业。JIT Secret 的数据不得写入日志。ARC Controller 是共享控制面；其 Karmada API 不可用、身份失效或调谐器重复运行都会影响所有 Scale Set，必须纳入集中告警和故障恢复。
 
 **可靠性故障分析（FMEA）**
 
@@ -1632,6 +1622,11 @@ sequenceDiagram
 | F02-01 | ARC 对任务需求的响应延迟。 | GitHub Job 需要等待 Runner。 | 比较 Runner 的期望数量与实际数量，并检查 ARC Controller 事件。 | ARC 运维人员应检查控制器状态和资源容量；平台按业务阈值发出告警。 | ARC 运维 |
 | F02-02 | Runner 注册失败或 Job 执行中断。 | Job 不能完成，错误重试可能导致重复执行。 | 检查 GitHub Run、临时 Runner 状态和 Pod 事件。 | 应按 GitHub 与 ARC 的官方机制处理；没有明确去重依据时不得再次派发。 | GitHub、ARC 运维 |
 | F02-03 | 临时资源的 Finalizer 阻止删除。 | 临时 Pod 或 Secret 仍占用资源。 | 按对象 UID 检查 ER、Pod、Binding、Work 和 Secret 的删除状态。 | 由对象所属控制器完成清理；需要人工操作时先确认资源所有者。 | ARC、Karmada 运维 |
+| F02-04 | Controller kubeconfig 指向宿主 API、地址不可达或 TLS/身份校验失败。 | Controller 无法 watch/调谐 ARC 对象，Runner 供给与回收停止。 | Controller 日志、Ready 状态和 API 探测；区分 DNS/TCP、TLS、401。 | 修正 Karmada endpoint、CA/SAN 或凭证；恢复后由 Controller 对账；不得切换到成员 API。 | ARC/网络/身份维护者 |
+| F02-05 | ARC CRD 或 Controller RBAC 安装到错误 API，或版本不一致。 | Karmada API 无法识别 ARC 类型，或 Controller 收到 403。 | 检查 Karmada API 上四类 CRD、Schema 版本和授权结果。 | 按同一 ARC release 修复 Karmada API 上的 CRD/RBAC；不得在每个成员补装 CRD。 | ARC 部署维护者 |
+| F02-06 | 多个 Controller 同时调谐且未启用 Leader Election。 | 重复调谐、资源竞争、状态抖动。 | 检查 Controller 副本、Leader Lease 和重复调谐日志。 | 启用 ARC Leader Election；确认 Karmada API 中 Lease RBAC 正确；每个联邦只保留一个活动 Leader。 | ARC 运维 |
+| F02-07 | PropagationPolicy 选择器过宽或凭证传播范围过大。 | 非 Runner Pod 被下发，长期 GitHub 凭证暴露到无关成员。 | 检查 Work、成员 Pod/Secret 清单和策略 Selector。 | 收紧到 ARC Runner 标签；撤销/轮换已暴露凭证；长期凭证只发给实际消费者。 | 联邦策略/安全管理员 |
+| F02-08 | Karmada API 暂时不可用或 Controller 重启。 | 新任务扩容、Listener 更新和清理延迟。 | API 健康检查、请求错误率、调谐积压和对象年龄。 | 恢复 Karmada API 后继续调谐并核对 UID；不在成员侧启动第二套 ARC Controller。 | Karmada/ARC 运维 |
 
 **风险—措施—验证追踪**（关联：SR-02-01、SR-02-02、SR-NF-03/06；延续上方 FMEA 编号，不替代已有故障表）
 
@@ -1640,6 +1635,11 @@ sequenceDiagram
 | F02-01 | ARC 供给滞后或已达 maxRunners | Job 排队、服务容量不足 | 中 | SP-01 容量上下限；分离需求、实例和注册三个观测阶段 | 从 ERS 期望数、ER/Pod 数及 GitHub Job 状态能判断瓶颈位置；不得承诺未批准的 SLA | GitHub 与 ARC 响应延迟不可由本系统单方保证 |
 | F02-02 | Runner 注册失败/运行中断 | Job 失败或重复执行副作用 | 高 | LC-01/LC-07 区分 Job 权威状态与 ARC 重试；集成层不自发重派 | Pod 丢失时不会由集成逻辑生成第二份相同 Job；结果取自 GitHub | 上游失败重试和业务幂等性仍需按正式机制约束 |
 | F02-03 | Finalizer 或成员失联导致残留 | Pod/JIT Secret 持续存在，凭证暴露窗口增加 | 高 | LC-05 与 3.5.2 分域删除确认，CleanupUnknown 和按所有权清理 | 控制面删除后仍能报告未清成员对象、UID、Finalizer 与目标成员 | 失联期间不能保证立即销毁 |
+| F02-04 | Controller 无法连接或认证 Karmada API | Runner 供给和回收停止 | 高 | SP-05 显式 kubeconfig、TLS 校验、专用身份；故障恢复后重新调谐 | 网络/TLS/401/403 可区分；恢复后对象收敛；无成员侧 Controller 接管 | Karmada API 故障仍会暂停新供给 |
+| F02-05 | CRD/RBAC 安装上下文或版本错误 | ARC 类型不可识别或调谐请求被拒绝 | 高 | ARC CRD/RBAC 统一安装到 Karmada API，按 release 固定版本 | Karmada API 上四类 CRD Schema 与 Controller 版本一致；权限测试通过 | 上游升级可能改变 API/权限 |
+| F02-06 | Controller 多副本无 Leader Election | 多个调谐者竞争同一 ARC 对象 | 高 | 单 Controller 或多副本 Leader Election；Lease 存在于 Karmada API | 任一时刻只有一个活动 Leader；故障切换后对象继续调谐 | Leader 选举依赖 Karmada API 可用 |
+| F02-07 | 传播策略选择器过宽、长期凭证被传播到执行成员 | 无关 Pod 被调度或长期凭证泄露 | 严重 | Runner/Listener 策略分离；JIT 依赖定向传播；长期凭证仅向实际消费者提供 | 非目标成员无 Listener 凭证和长期 GitHub 凭证；Runner Pod 精确匹配 | 错误授权或凭证泄露仍需外部撤销 |
+| F02-08 | Karmada API 中断或 Controller 重启 | 扩容、需求更新、资源清理延迟 | 高 | 保留 API 源对象和调谐状态；API 恢复后由 ARC/Karmada 对账 | 中断期间无本地回退 Controller；恢复后按 UID 核对资源 | 中断持续期间无法创建新 Runner |
 
 **运行诊断与敏感信息处理**：使用 GitHub Run、临时 Runner、Runner Pod UID、JIT Secret 和 Binding/Work 追踪同一次任务。Finalizer 阻止删除时，必须先确认设置它的控制器。
 
