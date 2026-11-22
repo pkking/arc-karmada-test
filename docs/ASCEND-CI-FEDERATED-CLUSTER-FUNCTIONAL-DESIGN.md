@@ -404,11 +404,11 @@ erDiagram
 
 | 部署域 | 构件 | 运行接口 | 设计约束 |
 |---|---|---|---|
-| ARC 管理域 | 官方 ARC Controller、Listener（位置可配置） | GitHub API、统一 Karmada API | 负责 Runner 供给与回收，不控制成员 NPU Node |
-| 联邦调度域 | **Dispatcher**、容量账本与预留协调 | Runner Binding、成员容量/Profile、Node 保护租约 | 唯一 Binding 写者；负责 Hold/Release 和选择成员；故障时安全对账与接管 |
-| Karmada 控制面 | API、Policy/Binding/Work、状态解释扩展 | 多成员 Kubernetes API | 负责资源对象传播及状态，不替代 Dispatcher 对目标 Runner Binding 的成员选择 |
-| Listener 成员域 | Listener Pod、独立控制面身份 | GitHub Actions、Karmada HTTPS API | 示例固定在 member1；目标成员是可配置的 Placement |
-| Runner 与 NPU 执行域 | Runner Pod、JIT Secret、真实 NPU Pod/PodGroup、Volcano、Device Plugin | GitHub Actions、成员 API/kubelet/Runtime | 单 Pod 检查单 Node；多 Pod 按同成员 Gang/拓扑调度，真实 NPU 资源请求与 Profile 对账 |
+| ARC Controller 运行域 | 官方 ARC Controller Deployment、Karmada API kubeconfig | 宿主管理集群 Kubernetes API（部署 Controller）；Karmada API（调谐 ARC 对象） | 每个 Karmada 联邦部署一套共享 Controller；Controller Pod 只运行在管理集群，不进入成员传播；多副本必须启用 Leader Election |
+| Karmada API 管理域 | ARC 四类 CRD、AutoscalingRunnerSet、AutoscalingListener、EphemeralRunnerSet、EphemeralRunner、PropagationPolicy、源 Pod/Secret/ServiceAccount | ARC Controller、Listener、Karmada API | ARC CRD 与 ARC 自定义资源只安装/保存于 Karmada API；不向成员传播 |
+| Listener 服务域 | ARC 为每个 Runner Scale Set 创建的 Listener Pod、独立 ServiceAccount/Token/CA | GitHub Actions、Karmada HTTPS API | Listener 按 Scale Set 运行；每个 Listener 只放置到一个指定服务成员，不在所有 Runner 成员重复部署 |
+| 联邦执行域 | Runner Pod、JIT Secret、Runner ServiceAccount、真实 NPU Pod/PodGroup、Volcano、Device Plugin | Karmada Work、成员 Kubernetes API、kubelet | Karmada 将 Runner Pod 放置到授权成员；JIT Secret 跟随 Pod 依赖传播；成员不部署 ARC Controller、不安装 ARC CRD |
+| 联邦调度域 | **Dispatcher**、容量账本与预留协调 | Runner Binding、成员容量/Profile、Node 保护租约 | 目标架构中的唯一 Binding 写者；负责 Hold/Release 和选择成员；当前 PoC 未包含 Dispatcher |
 | 平台外 | 镜像仓库、身份/密钥服务、运维/观测 | 拉取、认证、日志/指标 | 不要求跨成员 Pod 网络直连 |
 
 **配置输入清单（P）**：`runnerScaleSetName` / `runs-on`、GitHub URL、Runner 镜像/digest、控制面 API DNS/IP/port/SAN、CA、Token audience/TTL、目标成员集合、调度权重、Namespace、NPU 资源名、节点标签、业务 SLO。当前 Manifest 的 `karmada-runner`、`member1/member2`、`172.22.0.4:32443` 是示例值，后两者不应硬编码到通用部署工具。
@@ -426,6 +426,7 @@ erDiagram
 |---|---|---|
 | ARC-1 | [GitHub：Actions Runner Controller](https://docs.github.com/en/actions/concepts/runners/actions-runner-controller) | Runner Scale Set、Listener、EphemeralRunner、JIT、生命周期 |
 | ARC-2 | [GitHub：部署 Runner Scale Sets](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/deploy-runner-scale-sets) | Scale Set 部署配置、GitHub 凭证、Runner 模板 |
+| ARC-3 | [ARC 0.15.0 Controller Chart](https://github.com/actions/actions-runner-controller/tree/1945b42820760eb50893c8da77fdfc42cf8dad45/charts/gha-runner-scale-set-controller) | 同版本 CRD、Controller Deployment、Controller RBAC、Listener RBAC 与 Leader Election 配置；Chart 安装目标由 Helm Kubernetes Context 决定 |
 | KAR-1 | [Karmada：PropagationPolicy](https://karmada.io/docs/next/userguide/scheduling/propagation-policy/) | 资源选择器、成员放置、分副本/加权策略 |
 | KAR-2 | [Karmada：Propagate dependencies](https://karmada.io/docs/userguide/scheduling/propagate-dependencies/) | 对象引用的 Secret/ConfigMap 依赖传播 |
 | KAR-3 | [Karmada：Customizing Resource Interpreter](https://karmada.io/docs/userguide/globalview/customizing-resource-interpreter/) | ResourceInterpreterCustomization、AggregateStatus |
@@ -447,7 +448,7 @@ erDiagram
 | SP-02 候选成员策略 | 现有策略仅用 member1、member2 与 `Divided/Weighted`，无 Dispatcher。 | Dispatcher 选成员并按 PL-D03/D04 管理联邦 FIFO、公平、预留及安全 Backfill；成员 Volcano 按 PL-D05 的 NPU Pod PriorityClass 选择节点。 | 联邦调度维护者 |
 | SP-03 Runner Pod 选择范围 | 现有策略匹配 `arc-runners` 命名空间的全部 Pod。 | 平台必须只选择 ARC 管理的 Runner Pod。开发人员须按目标 ARC 版本的对象标签定义选择条件，并检查其他 Pod 不会被选中。 | 联邦策略维护者 |
 | SP-04 GitHub 主凭证传播 | 现有策略将 `arc-github-secret` 同步到两个成员集群。 | 平台必须按实际凭证使用者确定传播范围。临时 Runner 不应因为需要跨集群运行而自动获得 GitHub 管理凭证。 | 身份管理者 |
-| SP-05 Listener API 身份 | 示例通过单独的 Token 和 CA 证书访问固定 API 地址，Token 由脚本签发。 | 平台必须提供可配置的 API 地址、可信 CA、最小权限和凭证更新规则。必须区分网络、证书、身份认证和权限错误。 | 身份管理与部署维护者 |
+| SP-05 ARC API 身份与访问 | Controller 使用 PoC 管理员 kubeconfig；Listener 使用单独 Token/CA 访问固定 API 地址。 | Controller 与 Listener 必须分别使用专用 Karmada API 身份、可信 CA 和最小权限；Controller 显式连接 Karmada API；凭证可轮换；网络、TLS、401、403 分别诊断。 | 身份管理与部署维护者 |
 | SP-06 Runner Pod 状态 | 当前 Lua 解释器选取第一个非空 `status`。 | 状态解释必须保留 ARC 所需的 Pod 字段。该规则只适用于一个 Runner Pod 在一个成员运行且状态来源没有冲突的情况。 | 状态适配维护者 |
 | SP-07 临时资源生命周期 | ARC 和 Karmada 分别处理临时对象的删除。 | 平台必须能够关联同一任务的 Runner、Pod、JIT Secret 和联邦对象。删除失败时必须保留原因，不能任意清空未知 Finalizer。 | 控制器维护者和运维人员 |
 | SP-08 NPU 资源规格 | 当前示例无 NPU 资源规格与设备插件配置。 | 服务目录发布可信 NPU Resource Profile 并关联 Runner Service；Dispatcher 依据 Profile 做成员容量准入，成员 Volcano 按真实 NPU Pod/PodGroup 执行节点与 Gang 调度，设备插件负责设备分配。 | Runner 服务/联邦调度/成员资源池维护者 |
@@ -873,7 +874,7 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 | 访问主体和目标 | 认证方式 | 规定的权限与安全限制 |
 |---|---|---|
-| Controller → Karmada API | Controller 必须通过可信 CA 验证 Karmada API，并使用专门的 Kubernetes API 凭证。 | 平台必须按 ARC 管理资源所需的 API 操作授予权限，不得把管理员级 kubeconfig 作为生产目标权限。 |
+| Controller → Karmada API | Controller 必须使用显式 Karmada kubeconfig、可信 CA 和专用管理身份；Controller Pod 可运行在管理集群，但其宿主 ServiceAccount 不自动成为 Karmada API 身份。 | 平台必须将 ARC CRD/RBAC 安装到 Karmada API，并按锁定 ARC release 的 API 操作授予权限；不得把管理员级 kubeconfig 作为生产目标权限。 |
 | Listener → Karmada API | Listener 必须使用单独的 ServiceAccount 凭证和可验证的 HTTPS 地址。 | 权限应限制为指定 Runner 服务需要的 `EphemeralRunnerSet` 与 `EphemeralRunner` 操作；当前 [RBAC Manifest](../manifests/03-rbac.yaml) 是配置示例。 |
 | Runner Pod → GitHub Actions | Runner 使用 ARC 创建的 JIT 注册配置与 GitHub 通信。 | 不得使用管理端的长期 GitHub 凭证；Runner 模板使用 `automountServiceAccountToken: false` 避免自动挂载 Kubernetes API 令牌。 |
 | Karmada → 成员 API | Karmada 使用联邦成员注册时配置的访问身份。 | 成员 API 凭证应限制在传播资源和读取必要状态的操作范围内，由平台身份管理者维护。 |
@@ -888,7 +889,7 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 | 主体 → 目标 | 需要的身份及最小权限边界 | 凭证接收范围 | 当前配置事实/差距 |
 |---|---|---|---|
-| ARC Controller → Karmada API | 独立管理身份，仅允许管理所属 ARC 对象、Pod、JIT Secret 及所需状态；按真实 API 调用细化权限 | Controller 管理域 | `03-rbac.yaml` 注释注明宿主 Controller 使用 **admin kubeconfig**；不符合生产最小权限目标 |
+| ARC Controller → Karmada API | 独立管理身份；权限以锁定 ARC release 的官方 Controller RBAC 为基线，按实际 Namespace、API resource 和 verb 审核 | Controller 管理域；Kubeconfig 只读挂载 | PoC 使用 **admin kubeconfig**；生产必须改为专用 Karmada 身份，宿主集群 ServiceAccount 不自动等同 Karmada API 身份 |
 | ARC Controller → GitHub | GitHub App 或受控管理凭证，只允许所授权的组织/仓库与 Runner 管理操作 | 实际管理消费者 | `04-autoscalingrunnerset.yaml` 引用 `arc-github-secret` |
 | Listener → Karmada API | 独立 `karmada-listener-sa` 身份；限 `arc-runners` 目标资源，拒绝其他 Scale Set | 定向 Listener 成员；不得下发给普通 Runner | `03-rbac.yaml` 给 ERS 指定 `resourceNames: [karmada-runner]` 的 patch 权限；ER 的 get/patch/status patch 未按资源名约束，属当前版本所需最小能力待审查 |
 | Runner → GitHub | ARC 生成的一次性 JIT 注册配置，不允许取得长期 GitHub 管理凭证 | **实际执行成员** | `04-autoscalingrunnerset.yaml` Runner 设置 `automountServiceAccountToken: false` |
@@ -923,6 +924,26 @@ Controller、Listener、Runner 分别授权。Controller 管理 Runner 并持 Gi
 
 **配置差异：** 当前主凭证传播、Controller 高权限和 Listener Token 更新机制仍需满足上述安全约束。
 
+
+### 4.4.5 ARC Controller 接入与对象归属
+
+**设计决策（D）：** 一个 Karmada 联邦共享一套 ARC Controller。Controller 运行在管理集群，由显式 Karmada kubeconfig 访问 Karmada API。ARC 四类 CRD 和全部 ARC 自定义资源保留在 Karmada API；成员只接收需要在本地运行的 Kubernetes 工作负载及其依赖。成员集群不部署 ARC Controller，也不安装 ARC CRD。
+
+**设计原因：** ARC Controller 是 Runner 生命周期的唯一调谐者。每个成员部署一套 Controller 会形成多个独立的调谐入口、重复监听和凭证副本；多个 Controller 还可能同时处理同一组 ARC 对象。集中调谐使 Runner 创建、扩缩和回收具有单一权威来源。Karmada 负责把已创建的 Pod 传播到成员，不要求成员理解 ARC 的自定义资源模型。
+
+**API 边界：**
+
+| API 上下文 | 保存对象 | 职责 |
+|---|---|---|
+| 管理集群 Kubernetes API | ARC Controller Deployment、Controller 运行时 Secret/Config | 调度和维护 Controller 进程；不保存 ARC CRD/CR |
+| Karmada API | ARC CRD、ARC CR、传播策略、源 Pod/Secret/ServiceAccount、Binding | ARC 对象的唯一权威 API；Controller/Listener 的 Kubernetes API 访问目标 |
+| 成员 Kubernetes API | 被传播的 Listener/Runner Pod、必要 Secret/ServiceAccount、Karmada Work | 执行 Pod、挂载依赖并回传成员状态；不运行 ARC Controller |
+
+**ARC 对象归属：** AutoscalingRunnerSet 是平台声明的 Runner 服务；AutoscalingListener、EphemeralRunnerSet 和 EphemeralRunner 由 ARC 维护。四类 CRD 与上述 CR 全部保留在 Karmada API。Listener Pod 和 Runner Pod 是 Kubernetes 原生 Pod，不是 ARC CRD：Listener Pod 只放置到该 Scale Set 指定的服务成员；Runner Pod 由 Karmada 放置到授权执行成员。JIT Secret 和 Runner ServiceAccount 按 Pod 运行依赖传播。
+
+**示例：** karmada-runner Scale Set 服务于 vLLM 和 SGLang。ARC Controller 只部署在管理集群；Listener Pod 固定运行于 member-listener；Runner Pod 可由 Karmada 放置到 member-a 或 member-b。一次 Job 选择 member-b 后，只有该 Runner Pod 和对应 JIT Secret 到达 member-b。member-a 不接收这次任务的 JIT Secret，也不运行 ARC Controller。工作流只使用 runs-on: karmada-runner，不包含成员名称。
+
+**约束：** Controller、Listener、Runner 使用不同身份。Controller 凭证只授权管理 ARC 对象及其所需的 Kubernetes 资源；Listener 凭证只授权所属 Scale Set 的需求更新；Runner 默认不获得 Kubernetes API 权限。长期 GitHub 管理凭证只提供给实际消费者；若 Listener 位于成员，凭证最多传播到该 Listener 所在成员，不得传播到整个 Runner 候选池。
 
 ## 4.5 SP-06/SP-07 状态与生命周期规格设计
 
