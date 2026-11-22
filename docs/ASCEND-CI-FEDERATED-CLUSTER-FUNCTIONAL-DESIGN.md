@@ -1350,7 +1350,7 @@ F-02 按需供给临时 Runner。ARC 创建 Runner、Pod 和注册配置；作�
 - ephemeralrunnersets.actions.github.com
 - ephemeralrunners.actions.github.com
 
-CRD 来源与版本固定为同一 ARC release。当前仓库 crds/ 中的四个文件来自 gha-runner-scale-set-0.15.0，没有本地 Schema 补丁。CRD 不安装到成员 API，也不传播到成员。
+CRD 来源与版本固定为同一 ARC release。当前仓库 [crds/README.md](../crds/README.md) 记录的四个文件来自 gha-runner-scale-set-0.15.0，没有本地 Schema 补丁。CRD 不安装到成员 API，也不传播到成员。
 
 **对象边界：**
 
@@ -1441,7 +1441,7 @@ Controller 单副本运行时不需要 Leader Election。若部署多个副本�
 - Runner Pod：单独使用 Runner Pod PropagationPolicy，候选成员由平台授权列表确定。Selector 必须匹配 ARC Runner Pod，不得仅按 arc-runners Namespace 选择全部 Pod。
 - JIT Secret：对 Runner Pod 开启 propagateDeps: true，由 Karmada 按 Pod 的目标成员传播依赖。依赖传播是异步过程，不构成 Pod 与 Secret 的原子事务；Secret 未就绪时，Runner Pod 保持未就绪并等待依赖。
 - Runner ServiceAccount：传播到 Runner 候选成员，供 Pod admission 使用。该 ServiceAccount 不授予 Kubernetes API 权限，并在 Runner Pod 中关闭 Token 自动挂载。
-- GitHub 长期管理凭证：Controller 从 Karmada API 读取；若 Listener 需要该 Secret，只传播到 Listener 所在成员。普通 Runner Pod 不得引用或读取该凭证。当前 manifests/02-propagation-policies.yaml 将 arc-github-secret 传播到 member1 和 member2；这是 PoC 现状，与目标约束不一致。生产配置必须收窄到 Listener 实际所在成员，并验证其他 Runner 成员不存在该 Secret。
+- GitHub 长期管理凭证：Controller 从 Karmada API 读取；若 Listener 需要该 Secret，只传播到 Listener 所在成员。普通 Runner Pod 不得引用或读取该凭证。当前 [02-propagation-policies.yaml](../manifests/02-propagation-policies.yaml) 将 arc-github-secret 传播到 member1 和 member2；这是 PoC 现状，与目标约束不一致。生产配置必须收窄到 Listener 实际所在成员，并验证其他 Runner 成员不存在该 Secret。
 
 **5. Listener 与 Controller 的职责边界**
 
@@ -1458,6 +1458,7 @@ sequenceDiagram
     participant K as Karmada API
     participant KS as Karmada Scheduler
     participant M as 目标成员 Kubernetes
+    participant R as Runner Pod
     GH-->>L: Job 需求
     L->>K: Patch EphemeralRunnerSet（Listener 身份）
     K-->>C: Watch ARC CR 变化
@@ -1465,9 +1466,10 @@ sequenceDiagram
     K->>KS: 按 Runner Pod PropagationPolicy 选择成员
     KS->>M: Work 下发 Runner Pod
     K->>M: 传播该 Pod 引用的 JIT Secret 和 Runner ServiceAccount
+    M->>R: 创建并启动 Runner Pod
     M-->>K: 聚合 Pod 状态
     K-->>C: 返回 ARC 可读取的 Runner Pod 状态
-    M->>GH: Runner 使用 JIT 注册并执行 Job
+    R->>GH: Runner 使用 JIT 注册并执行 Job
     GH-->>L: 任务需求变化 / 完成
     L->>K: 更新 EphemeralRunnerSet
     C->>K: 按 ARC 生命周期回收临时对象
